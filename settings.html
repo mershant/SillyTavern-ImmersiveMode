@@ -1,0 +1,55 @@
+<div class="immersive_mode_settings">
+  <div class="inline-drawer">
+    <div class="inline-drawer-toggle inline-drawer-header">
+      <b>Immersive Mode</b>
+      <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+    </div>
+    <div class="inline-drawer-content">
+      <div style="display:flex; flex-direction:column; gap:8px">
+        <label class="checkbox_label"><input type="checkbox" class="im_auto_open" /> Auto-open immersive mode for new assistant messages</label>
+        <label class="checkbox_label"><input type="checkbox" class="im_split_big_blocks" /> Split big narration blocks</label>
+        <label class="checkbox_label"><input type="checkbox" class="im_show_progress" /> Show progress rail</label>
+        <label class="checkbox_label"><input type="checkbox" class="im_show_message_ids" /> Show subtle message IDs</label>
+        <label class="checkbox_label"><input type="checkbox" class="im_show_button" /> Show immersive button on messages</label>
+      </div>
+
+      <div style="margin-top:10px">
+        <label>Scroll Mode</label>
+      </div>
+      <select class="text_pole im_scroll_mode">
+        <option value="threshold">True free threshold</option>
+        <option value="step">Single-step</option>
+      </select>
+
+      <div style="margin-top:10px">
+        <label>Scroll Weight</label>
+      </div>
+      <select class="text_pole im_weight">
+        <option value="heavy">Heavy</option>
+        <option value="silk">Silk</option>
+        <option value="fast">Fast</option>
+      </select>
+
+      <div style="margin-top:10px">
+        <label>Glass Text Material</label>
+      </div>
+      <select class="text_pole im_material">
+        <option value="pearl">Pearl</option>
+        <option value="crystal">Crystal</option>
+        <option value="etched">Etched</option>
+        <option value="liquid">Liquid</option>
+      </select>
+
+      <div style="margin-top:10px">
+        <label>Threshold</label>
+      </div>
+      <input type="range" class="im_threshold" min="0.25" max="0.75" step="0.01" />
+      <small>How far you must scroll toward the next beat before it centers automatically.</small>
+
+      <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap">
+        <button class="menu_button im_open_now">Open latest assistant message</button>
+        <button class="menu_button im_close_now">Close immersive mode</button>
+      </div>
+    </div>
+  </div>
+</div>

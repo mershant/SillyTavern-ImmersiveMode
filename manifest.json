@@ -1,0 +1,11 @@
+{
+  "display_name": "Immersive Mode",
+  "loading_order": 302,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "David + Hermes",
+  "version": "0.1.0",
+  "description": "Center-focal immersive reader for SillyTavern messages with threshold free-scroll, glass text materials, and quote-safe beat splitting."
+}
