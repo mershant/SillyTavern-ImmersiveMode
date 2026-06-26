@@ -11,7 +11,27 @@
         <label class="checkbox_label"><input type="checkbox" class="im_show_progress" /> Show progress rail</label>
         <label class="checkbox_label"><input type="checkbox" class="im_show_message_ids" /> Show subtle message IDs</label>
         <label class="checkbox_label"><input type="checkbox" class="im_show_button" /> Show immersive button on messages</label>
+        <label class="checkbox_label"><input type="checkbox" class="im_fade_on_end" /> Fade back to chat when the last beat finishes</label>
+        <label class="checkbox_label"><input type="checkbox" class="im_show_inmode_controls" /> Show in-mode reading controls</label>
+        <label class="checkbox_label"><input type="checkbox" class="im_hide_st_chrome" /> Hide top bar and chat bar while immersive is open</label>
       </div>
+
+      <div style="margin-top:10px">
+        <label>Extraction Mode</label>
+      </div>
+      <select class="text_pole im_extraction_mode">
+        <option value="sentence">Per sentence</option>
+        <option value="balanced">Balanced blocks</option>
+      </select>
+
+      <div style="margin-top:10px">
+        <label>Text Position</label>
+      </div>
+      <select class="text_pole im_position">
+        <option value="center">Center</option>
+        <option value="top">Top</option>
+        <option value="bottom">Bottom</option>
+      </select>
 
       <div style="margin-top:10px">
         <label>Scroll Mode</label>
@@ -45,6 +65,17 @@
       </div>
       <input type="range" class="im_threshold" min="0.25" max="0.75" step="0.01" />
       <small>How far you must scroll toward the next beat before it centers automatically.</small>
+
+      <div style="margin-top:10px">
+        <label>Font Size</label>
+      </div>
+      <input type="range" class="im_font_size" min="18" max="64" step="1" />
+
+      <div style="margin-top:10px">
+        <label>Line Spread</label>
+      </div>
+      <input type="range" class="im_spread" min="130" max="320" step="5" />
+      <small>Distance between beats while scrolling; larger values give big text more breathing room.</small>
 
       <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap">
         <button class="menu_button im_open_now">Open latest assistant message</button>

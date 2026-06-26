@@ -3,24 +3,35 @@ body.immersive-mode-active #chat {
   transition: opacity 220ms ease;
 }
 
+body.immersive-mode-active.im-hide-st-chrome #top-bar,
+body.immersive-mode-active.im-hide-st-chrome #top-settings-holder,
+body.immersive-mode-active.im-hide-st-chrome #form_sheld {
+  opacity: 0.08;
+  filter: blur(3px);
+  pointer-events: none;
+  transition: opacity 220ms ease, filter 220ms ease;
+}
+
 .immersive_mode_settings small { opacity: 0.75; }
 
 .mes_immersive_mode_button::before { content: "\f06e"; }
 
 .im-overlay {
   position: fixed;
-  inset: 0 0 105px 0;
+  inset: 48px 0 105px 0;
   z-index: 4999;
   background: transparent;
   color: #f6f3eb;
   overflow: hidden;
   display: none;
+  pointer-events: none;
   font-family: "Iowan Old Style", "Palatino", Georgia, serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
 .im-overlay.im-open { display: block; }
+.im-overlay.im-hide-chrome { inset: 0; }
 
 .im-stage {
   position: absolute;
@@ -31,6 +42,7 @@ body.immersive-mode-active #chat {
   overflow: hidden;
   cursor: grab;
   touch-action: none;
+  pointer-events: auto;
 }
 
 .im-stage.im-drag { cursor: grabbing; }
@@ -44,14 +56,18 @@ body.immersive-mode-active #chat {
   transform-style: preserve-3d;
 }
 
+.im-position-top .im-world { top: 28%; }
+.im-position-center .im-world { top: 50%; }
+.im-position-bottom .im-world { top: 70%; }
+
 .im-beat {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
   text-align: center;
-  font-size: clamp(24px, 3.55vw, 42px);
-  line-height: 1.45;
+  font-size: var(--im-font-size, 38px);
+  line-height: 1.55;
   letter-spacing: .12px;
   transform-origin: center center;
   backface-visibility: hidden;
@@ -116,22 +132,39 @@ body.immersive-mode-active #chat {
   filter: drop-shadow(0 0 3px rgba(255,255,255,.65)) drop-shadow(0 0 22px rgba(130,190,255,.42)) drop-shadow(0 0 54px rgba(255,207,107,.16));
 }
 
-.im-close {
-  position: absolute;
-  top: 14px;
-  right: 16px;
-  z-index: 2;
+.im-close,
+.im-control-pill {
   border: 1px solid rgba(255,255,255,.08);
-  background: rgba(10,12,18,.55);
+  background: rgba(10,12,18,.45);
   color: #9aa3b2;
   border-radius: 999px;
   padding: 7px 12px;
   font-family: system-ui, sans-serif;
   font-size: 12px;
   cursor: pointer;
+  backdrop-filter: blur(12px);
+  pointer-events: auto;
 }
 
-.im-close:hover { color: #fff; border-color: rgba(255,255,255,.18); }
+.im-close { position: absolute; top: 14px; right: 16px; z-index: 2; }
+.im-close:hover, .im-control-pill:hover, .im-control-pill.im-active { color: #fff; border-color: rgba(255,255,255,.18); }
+
+.im-controls {
+  position: absolute;
+  left: 50%;
+  bottom: 52px;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: system-ui, sans-serif;
+  opacity: .72;
+  transition: opacity 180ms ease;
+}
+.im-controls:hover { opacity: 1; }
+.im-overlay:not(.im-show-controls) .im-controls { display: none; }
+.im-control-range { width: 120px; accent-color: #ffcf6b; pointer-events: auto; }
 
 .im-hud {
   position: absolute;
@@ -155,16 +188,6 @@ body.immersive-mode-active #chat {
   overflow: hidden;
 }
 
-.im-fill {
-  height: 100%;
-  width: 0;
-  background: linear-gradient(90deg,rgba(180,205,255,.7),#ffcf6b);
-}
-
-.im-meta {
-  font-size: 10.5px;
-  color: #5d6573;
-  letter-spacing: 1px;
-}
-
+.im-fill { height: 100%; width: 0; background: linear-gradient(90deg,rgba(180,205,255,.7),#ffcf6b); }
+.im-meta { font-size: 10.5px; color: #5d6573; letter-spacing: 1px; }
 .im-overlay:not(.im-show-progress) .im-hud { display: none; }

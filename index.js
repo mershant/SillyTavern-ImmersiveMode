@@ -14,9 +14,16 @@ const DEFAULT_SETTINGS = {
   showMessageIds: false,
   showButton: true,
   scrollMode: 'threshold',
+  extractionMode: 'sentence',
+  position: 'center',
   weight: 'heavy',
   material: 'pearl',
   threshold: 0.46,
+  fontSize: 38,
+  spread: 220,
+  fadeOnEnd: true,
+  showInModeControls: true,
+  hideStChrome: false,
 };
 
 const extensionName = (() => {
@@ -93,7 +100,10 @@ function renderBeatHtml(text) {
 function splitLongPlain(text) {
   const source = String(text || '').trim();
   if (!source) return [];
-  if (source.length <= 85) return [source];
+  const settings = getSettings();
+  const maxShort = settings.extractionMode === 'balanced' ? 130 : 55;
+  const maxSentence = settings.extractionMode === 'balanced' ? 155 : 115;
+  if (source.length <= maxShort) return [source];
   const paraParts = source.split(/\n{2,}/).map(x => x.trim()).filter(Boolean);
   const out = [];
   for (const para of paraParts) {
@@ -104,7 +114,7 @@ function splitLongPlain(text) {
       sentences = para.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
     }
     for (const sentence of (sentences.length ? sentences : [para])) {
-      if (sentence.length <= 115) out.push(sentence);
+      if (sentence.length <= maxSentence) out.push(sentence);
       else {
         const clauses = sentence.split(/(?<=—|;|:)\s+/).map(x => x.trim()).filter(Boolean);
         out.push(...(clauses.length > 1 ? clauses : [sentence]));
@@ -155,6 +165,12 @@ function createOverlay() {
   overlay.innerHTML = `
     <button class="im-close" title="Close immersive mode">exit</button>
     <div class="im-stage"><div class="im-world"></div></div>
+    <div class="im-controls">
+      <button class="im-control-pill im-font-down" title="Smaller text">A−</button>
+      <input class="im-control-range im-font-range" type="range" min="18" max="64" step="1" />
+      <button class="im-control-pill im-font-up" title="Larger text">A+</button>
+      <button class="im-control-pill im-toggle-chrome" title="Toggle top/chat bars">bars</button>
+    </div>
     <div class="im-hud"><div class="im-rail"><div class="im-fill"></div></div><div class="im-meta">— / —</div></div>
   `;
   document.body.appendChild(overlay);
@@ -164,6 +180,20 @@ function createOverlay() {
   meta = overlay.querySelector('.im-meta');
   closeButton = overlay.querySelector('.im-close');
   closeButton.addEventListener('click', closeImmersive);
+  overlay.querySelector('.im-font-range').addEventListener('input', event => {
+    const settings = getSettings();
+    settings.fontSize = Number(event.target.value) || DEFAULT_SETTINGS.fontSize;
+    saveSettings();
+    applyOverlaySettings();
+  });
+  overlay.querySelector('.im-font-down').addEventListener('click', () => adjustFontSize(-2));
+  overlay.querySelector('.im-font-up').addEventListener('click', () => adjustFontSize(2));
+  overlay.querySelector('.im-toggle-chrome').addEventListener('click', () => {
+    const settings = getSettings();
+    settings.hideStChrome = !settings.hideStChrome;
+    saveSettings();
+    applyOverlaySettings();
+  });
   attachMotionHandlers();
 }
 
@@ -171,13 +201,34 @@ function resetMotion() {
   index = 0; offset = 0; velocity = 0; settling = false; dragging = false;
 }
 
+function adjustFontSize(delta) {
+  const settings = getSettings();
+  settings.fontSize = clamp((Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize) + delta, 18, 64);
+  saveSettings();
+  applyOverlaySettings();
+}
+
+function applyOverlaySettings() {
+  if (!overlay) return;
+  const settings = getSettings();
+  overlay.classList.toggle('im-show-progress', !!settings.showProgress);
+  overlay.classList.toggle('im-show-controls', !!settings.showInModeControls);
+  overlay.classList.toggle('im-hide-chrome', !!settings.hideStChrome);
+  overlay.classList.remove('im-position-top', 'im-position-center', 'im-position-bottom');
+  overlay.classList.add(`im-position-${settings.position || 'center'}`);
+  overlay.classList.remove('im-material-pearl', 'im-material-crystal', 'im-material-etched', 'im-material-liquid');
+  overlay.classList.add(`im-material-${settings.material || 'pearl'}`);
+  overlay.style.setProperty('--im-font-size', `${Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize}px`);
+  overlay.querySelector('.im-font-range').value = Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize;
+  overlay.querySelector('.im-toggle-chrome').classList.toggle('im-active', !!settings.hideStChrome);
+  document.body.classList.toggle('im-hide-st-chrome', !!settings.hideStChrome && overlay.classList.contains('im-open'));
+}
+
 function renderBeats() {
   world.innerHTML = '';
   elements = [];
   const settings = getSettings();
-  overlay.classList.toggle('im-show-progress', !!settings.showProgress);
-  overlay.classList.remove('im-material-pearl', 'im-material-crystal', 'im-material-etched', 'im-material-liquid');
-  overlay.classList.add(`im-material-${settings.material || 'pearl'}`);
+  applyOverlaySettings();
 
   beats.forEach((beat, i) => {
     const el = document.createElement('div');
@@ -202,6 +253,7 @@ function openMessage(messageId) {
   renderBeats();
   overlay.classList.add('im-open');
   document.body.classList.add('immersive-mode-active');
+  applyOverlaySettings();
   if (!rafStarted) { rafStarted = true; requestAnimationFrame(loop); }
 }
 
@@ -214,7 +266,7 @@ function openLatestAssistant() {
 
 function closeImmersive() {
   overlay?.classList.remove('im-open');
-  document.body.classList.remove('immersive-mode-active');
+  document.body.classList.remove('immersive-mode-active', 'im-hide-st-chrome');
 }
 
 function startSettle(toIndex) {
@@ -242,7 +294,9 @@ function paint() {
   if (!overlay?.classList.contains('im-open') || !elements.length) return;
   const visual = index + offset;
   const mid = overlay.clientHeight / 2;
-  const step = 180;
+  const baseStep = Number(getSettings().spread) || DEFAULT_SETTINGS.spread;
+  const fontSize = Number(getSettings().fontSize) || DEFAULT_SETTINGS.fontSize;
+  const step = Math.max(baseStep, fontSize * 4.3);
   elements.forEach((el, i) => {
     const d = i - visual;
     const y = mid + d * step;
@@ -272,7 +326,14 @@ function loop(ts) {
       const cur = settleFrom + (settleTo - settleFrom) * easeOutCubic(t);
       index = Math.floor(clamp(settleTo, 0, beats.length - 1));
       offset = cur - index;
-      if (t >= 1) { index = settleTo; offset = 0; settling = false; }
+      if (t >= 1) {
+        index = settleTo; offset = 0; settling = false;
+        if (getSettings().fadeOnEnd && index >= beats.length - 1) {
+          overlay.style.transition = 'opacity 420ms ease';
+          overlay.style.opacity = '0';
+          setTimeout(() => { overlay.style.opacity = ''; overlay.style.transition = ''; closeImmersive(); }, 430);
+        }
+      }
     } else if (!dragging) {
       offset += velocity * frames;
       velocity *= Math.pow(getWeight().friction, frames);
@@ -310,7 +371,8 @@ function attachMotionHandlers() {
   });
   stage.addEventListener('pointermove', event => {
     if (!dragging) return;
-    offset = clamp(dragStartOffset - (event.clientY - dragStartY) / 180, -0.95, 0.95);
+    const dragStep = Math.max(Number(getSettings().spread) || DEFAULT_SETTINGS.spread, (Number(getSettings().fontSize) || DEFAULT_SETTINGS.fontSize) * 4.3);
+    offset = clamp(dragStartOffset - (event.clientY - dragStartY) / dragStep, -0.95, 0.95);
     velocity = 0;
   });
   stage.addEventListener('pointerup', () => {
@@ -321,10 +383,10 @@ function attachMotionHandlers() {
 
   document.addEventListener('keydown', event => {
     if (!overlay?.classList.contains('im-open')) return;
-    if (['ArrowDown', 'ArrowRight', 'Space'].includes(event.code)) { event.preventDefault(); startSettle(index + 1); }
-    if (['ArrowUp', 'ArrowLeft'].includes(event.code)) { event.preventDefault(); startSettle(index - 1); }
-    if (event.code === 'Escape') { event.preventDefault(); closeImmersive(); }
-  });
+    if (['ArrowDown', 'ArrowRight', 'Space'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(index + 1); }
+    if (['ArrowUp', 'ArrowLeft'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(index - 1); }
+    if (event.code === 'Escape') { event.preventDefault(); event.stopPropagation(); closeImmersive(); }
+  }, true);
 }
 
 function addMessageButton() {
@@ -357,10 +419,17 @@ async function addSettingsUi() {
   container.find('.im_show_progress').prop('checked', settings.showProgress).on('change', function () { settings.showProgress = !!$(this).prop('checked'); saveSettings(); if (overlay) renderBeats(); });
   container.find('.im_show_message_ids').prop('checked', settings.showMessageIds).on('change', function () { settings.showMessageIds = !!$(this).prop('checked'); saveSettings(); if (overlay) renderBeats(); });
   container.find('.im_show_button').prop('checked', settings.showButton).on('change', function () { settings.showButton = !!$(this).prop('checked'); saveSettings(); updateMessageButtonVisibility(); });
+  container.find('.im_fade_on_end').prop('checked', settings.fadeOnEnd).on('change', function () { settings.fadeOnEnd = !!$(this).prop('checked'); saveSettings(); });
+  container.find('.im_show_inmode_controls').prop('checked', settings.showInModeControls).on('change', function () { settings.showInModeControls = !!$(this).prop('checked'); saveSettings(); applyOverlaySettings(); });
+  container.find('.im_hide_st_chrome').prop('checked', settings.hideStChrome).on('change', function () { settings.hideStChrome = !!$(this).prop('checked'); saveSettings(); applyOverlaySettings(); });
+  container.find('.im_extraction_mode').val(settings.extractionMode).on('change', function () { settings.extractionMode = String($(this).val() || 'sentence'); saveSettings(); if (overlay && activeMessageId !== null) renderBeats(); });
+  container.find('.im_position').val(settings.position).on('change', function () { settings.position = String($(this).val() || 'center'); saveSettings(); applyOverlaySettings(); });
   container.find('.im_scroll_mode').val(settings.scrollMode).on('change', function () { settings.scrollMode = String($(this).val() || 'threshold'); saveSettings(); });
   container.find('.im_weight').val(settings.weight).on('change', function () { settings.weight = String($(this).val() || 'heavy'); saveSettings(); });
   container.find('.im_material').val(settings.material).on('change', function () { settings.material = String($(this).val() || 'pearl'); saveSettings(); if (overlay) renderBeats(); });
   container.find('.im_threshold').val(settings.threshold).on('input change', function () { settings.threshold = Number($(this).val()) || DEFAULT_SETTINGS.threshold; saveSettings(); });
+  container.find('.im_font_size').val(settings.fontSize).on('input change', function () { settings.fontSize = Number($(this).val()) || DEFAULT_SETTINGS.fontSize; saveSettings(); applyOverlaySettings(); });
+  container.find('.im_spread').val(settings.spread).on('input change', function () { settings.spread = Number($(this).val()) || DEFAULT_SETTINGS.spread; saveSettings(); paint(); });
   container.find('.im_open_now').on('click', openLatestAssistant);
   container.find('.im_close_now').on('click', closeImmersive);
 }
@@ -395,6 +464,7 @@ function exposePublicApi() {
       renderBeats();
       overlay.classList.add('im-open');
       document.body.classList.add('immersive-mode-active');
+      applyOverlaySettings();
       if (!rafStarted) { rafStarted = true; requestAnimationFrame(loop); }
     },
     getState() {
