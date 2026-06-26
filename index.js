@@ -52,6 +52,7 @@ let activeMessageId = null;
 let beats = [];
 let elements = [];
 let halfHeights = [];
+let beatCenters = [];
 let index = 0;
 let offset = 0;
 let velocity = 0;
@@ -241,6 +242,38 @@ function resetMotion() {
   index = 0; offset = 0; velocity = 0; settling = false; dragging = false;
 }
 
+function recalculateBeatMetrics() {
+  halfHeights = elements.map(el => el.offsetHeight / 2);
+  const settings = getSettings();
+  const baseSpread = Number(settings.spread) || DEFAULT_SETTINGS.spread;
+  const gap = clamp(baseSpread * 0.35, 44, 120);
+  beatCenters = [];
+  let cursor = 0;
+  for (let i = 0; i < elements.length; i++) {
+    if (i === 0) {
+      beatCenters[i] = 0;
+      continue;
+    }
+    cursor += halfHeights[i - 1] + halfHeights[i] + gap;
+    beatCenters[i] = cursor;
+  }
+}
+
+function getLocalStep(direction = 1) {
+  if (direction >= 0 && index < beatCenters.length - 1) return Math.max(1, beatCenters[index + 1] - beatCenters[index]);
+  if (direction < 0 && index > 0) return Math.max(1, beatCenters[index] - beatCenters[index - 1]);
+  return Math.max(Number(getSettings().spread) || DEFAULT_SETTINGS.spread, (Number(getSettings().fontSize) || DEFAULT_SETTINGS.fontSize) * 4.3);
+}
+
+function centerForVisual(visual) {
+  if (!beatCenters.length) return 0;
+  const lo = Math.floor(clamp(visual, 0, beatCenters.length - 1));
+  const hi = Math.ceil(clamp(visual, 0, beatCenters.length - 1));
+  if (lo === hi) return beatCenters[lo] || 0;
+  const t = visual - lo;
+  return (beatCenters[lo] || 0) + ((beatCenters[hi] || 0) - (beatCenters[lo] || 0)) * t;
+}
+
 function adjustFontSize(delta) {
   const settings = getSettings();
   settings.fontSize = clamp((Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize) + delta, 18, 64);
@@ -263,7 +296,7 @@ function applyOverlaySettings() {
   overlay.querySelector('.im-toggle-chrome').classList.toggle('im-active', !!settings.hideStChrome);
   document.body.classList.toggle('im-hide-st-chrome', !!settings.hideStChrome && overlay.classList.contains('im-open'));
   requestAnimationFrame(() => {
-    halfHeights = elements.map(el => el.offsetHeight / 2);
+    recalculateBeatMetrics();
     paint();
   });
 }
@@ -285,7 +318,7 @@ function renderBeats() {
     elements.push(el);
   });
   requestAnimationFrame(() => {
-    halfHeights = elements.map(el => el.offsetHeight / 2);
+    recalculateBeatMetrics();
     paint();
   });
 }
@@ -365,15 +398,13 @@ function paint() {
   if (!overlay?.classList.contains('im-open') || !elements.length) return;
   const visual = index + offset;
   const mid = overlay.clientHeight / 2;
-  const baseStep = Number(getSettings().spread) || DEFAULT_SETTINGS.spread;
-  const fontSize = Number(getSettings().fontSize) || DEFAULT_SETTINGS.fontSize;
   const settings = getSettings();
   const displayMode = settings.displayMode || 'spotlight';
   const contextPreview = !!settings.contextPreview || displayMode === 'teleprompter' || displayMode === 'rotary';
-  const step = Math.max(baseStep, fontSize * 4.3);
+  const currentCenter = centerForVisual(visual);
   elements.forEach((el, i) => {
     const d = i - visual;
-    const y = mid + d * step;
+    const y = mid + ((beatCenters[i] || 0) - currentCenter);
     const dn = Math.abs(d);
     const farLimit = contextPreview ? 3.0 : 1.35;
     if (dn > farLimit) {
@@ -465,7 +496,7 @@ function attachMotionHandlers() {
   });
   stage.addEventListener('pointermove', event => {
     if (!dragging) return;
-    const dragStep = Math.max(Number(getSettings().spread) || DEFAULT_SETTINGS.spread, (Number(getSettings().fontSize) || DEFAULT_SETTINGS.fontSize) * 4.3);
+    const dragStep = getLocalStep(event.clientY < dragStartY ? 1 : -1);
     offset = clamp(dragStartOffset - (event.clientY - dragStartY) / dragStep, -0.95, 0.95);
     velocity = 0;
   });
@@ -489,7 +520,7 @@ function attachMotionHandlers() {
   window.addEventListener('resize', () => {
     if (!overlay?.classList.contains('im-open')) return;
     requestAnimationFrame(() => {
-      halfHeights = elements.map(el => el.offsetHeight / 2);
+      recalculateBeatMetrics();
       paint();
     });
   });

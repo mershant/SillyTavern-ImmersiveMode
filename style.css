@@ -95,7 +95,7 @@ body.immersive-mode-active.im-hide-st-chrome #form_sheld {
   font-weight: 500;
 }
 
-.im-txt { display: inline; }
+.im-txt { display: inline; text-wrap: balance; }
 
 .im-pop, .im-txt strong, .im-txt b {
   font-weight: 650;
