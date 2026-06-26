@@ -47,6 +47,7 @@ let closeButton;
 let activeMessageId = null;
 let beats = [];
 let elements = [];
+let halfHeights = [];
 let index = 0;
 let offset = 0;
 let velocity = 0;
@@ -224,11 +225,16 @@ function applyOverlaySettings() {
   overlay.querySelector('.im-font-range').value = Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize;
   overlay.querySelector('.im-toggle-chrome').classList.toggle('im-active', !!settings.hideStChrome);
   document.body.classList.toggle('im-hide-st-chrome', !!settings.hideStChrome && overlay.classList.contains('im-open'));
+  requestAnimationFrame(() => {
+    halfHeights = elements.map(el => el.offsetHeight / 2);
+    paint();
+  });
 }
 
 function renderBeats() {
   world.innerHTML = '';
   elements = [];
+  halfHeights = [];
   const settings = getSettings();
   applyOverlaySettings();
 
@@ -241,7 +247,10 @@ function renderBeats() {
     world.appendChild(el);
     elements.push(el);
   });
-  paint();
+  requestAnimationFrame(() => {
+    halfHeights = elements.map(el => el.offsetHeight / 2);
+    paint();
+  });
 }
 
 function openMessage(messageId) {
@@ -320,14 +329,18 @@ function paint() {
     const d = i - visual;
     const y = mid + d * step;
     const dn = Math.abs(d);
+    if (dn > 2.2) {
+      el.style.visibility = 'hidden';
+      el.style.opacity = '0';
+      return;
+    }
     let opacity = 1 - smoothstep(dn / 0.92);
     opacity = Math.pow(opacity, 1.52);
-    const blur = opacity > 0.93 ? 0 : (1 - opacity) * 4.2;
-    const scale = 0.86 + 0.14 * opacity;
-    const half = el.offsetHeight / 2;
-    el.style.transform = `translateY(${(y - mid - half).toFixed(2)}px) scale(${scale.toFixed(3)})`;
+    const scale = 0.9 + 0.1 * opacity;
+    const half = halfHeights[i] || 0;
+    el.style.transform = `translate3d(0, ${(y - mid - half).toFixed(2)}px, 0) scale(${scale.toFixed(3)})`;
     el.style.opacity = opacity.toFixed(3);
-    el.style.filter = blur < 0.05 ? 'none' : `blur(${blur.toFixed(2)}px)`;
+    el.style.filter = 'none';
     el.style.visibility = opacity < 0.004 ? 'hidden' : 'visible';
   });
   const progress = beats.length > 0 ? visual / beats.length : 0;
@@ -491,6 +504,9 @@ function exposePublicApi() {
     },
     getState() {
       return { activeMessageId, beats: beats.map(b => stripTags(b.html)), index, offset, open: overlay?.classList.contains('im-open') || false };
+    },
+    debugSegmentHtml(html) {
+      return buildBeatsFromMessage({ mes: String(html || ''), name: 'debug', is_user: false, is_system: false }, 'debug').map(b => stripTags(b.html));
     },
   };
 }
