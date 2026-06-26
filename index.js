@@ -103,7 +103,7 @@ function splitLongPlain(text) {
   const settings = getSettings();
   const sentenceMode = settings.extractionMode === 'sentence';
   const maxShort = settings.extractionMode === 'balanced' ? 130 : 0;
-  const maxSentence = settings.extractionMode === 'balanced' ? 155 : 115;
+  const maxSentence = settings.extractionMode === 'balanced' ? 155 : 72;
   if (!sentenceMode && source.length <= maxShort) return [source];
   const paraParts = source.split(/\n{2,}/).map(x => x.trim()).filter(Boolean);
   const out = [];
@@ -117,7 +117,8 @@ function splitLongPlain(text) {
     for (const sentence of (sentences.length ? sentences : [para])) {
       if (sentence.length <= maxSentence) out.push(sentence);
       else {
-        const clauses = sentence.split(/(?<=—|;|:)\s+/).map(x => x.trim()).filter(Boolean);
+        const clausePattern = settings.extractionMode === 'sentence' ? /(?<=,|—|;|:)\s+/ : /(?<=—|;|:)\s+/;
+        const clauses = sentence.split(clausePattern).map(x => x.trim()).filter(Boolean);
         out.push(...(clauses.length > 1 ? clauses : [sentence]));
       }
     }
