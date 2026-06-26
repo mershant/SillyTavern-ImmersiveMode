@@ -15,7 +15,7 @@ const DEFAULT_SETTINGS = {
   showButton: true,
   scrollMode: 'threshold',
   extractionMode: 'sentence',
-  displayMode: 'spotlight',
+  displayMode: 'rotary',
   position: 'center',
   weight: 'heavy',
   material: 'pearl',
@@ -25,7 +25,7 @@ const DEFAULT_SETTINGS = {
   fadeOnEnd: true,
   showInModeControls: true,
   hideStChrome: false,
-  contextPreview: false,
+  contextPreview: true,
   emphasisAtomicMax: 140,
 };
 
@@ -72,6 +72,11 @@ function getSettings() {
     if (settings[key] === undefined) settings[key] = structuredClone(value);
   }
   settings.version = VERSION;
+  if ((settings.displayDefaultsVersion || 0) < 2) {
+    settings.displayMode = 'rotary';
+    settings.contextPreview = true;
+    settings.displayDefaultsVersion = 2;
+  }
   return settings;
 }
 
@@ -277,6 +282,9 @@ function openMessage(messageId) {
   if (!beats.length) return;
   resetMotion();
   renderBeats();
+  overlay.classList.remove('im-closing');
+  overlay.style.opacity = '';
+  overlay.style.transition = '';
   overlay.classList.add('im-open');
   document.body.classList.add('immersive-mode-active');
   applyOverlaySettings();
@@ -290,20 +298,23 @@ function openLatestAssistant() {
   toastr?.warning?.('No assistant message found.', 'Immersive Mode');
 }
 
-function closeImmersive() {
-  overlay?.classList.remove('im-open');
+function finishCloseImmersive() {
+  overlay?.classList.remove('im-open', 'im-closing');
+  if (overlay) { overlay.style.opacity = ''; overlay.style.transition = ''; }
   document.body.classList.remove('immersive-mode-active', 'im-hide-st-chrome');
+}
+
+function closeImmersive() {
+  fadeCloseImmersive();
 }
 
 function fadeCloseImmersive() {
   if (!overlay?.classList.contains('im-open')) return;
+  if (overlay.classList.contains('im-closing')) return;
+  overlay.classList.add('im-closing');
   overlay.style.transition = 'opacity 420ms ease';
   overlay.style.opacity = '0';
-  setTimeout(() => {
-    overlay.style.opacity = '';
-    overlay.style.transition = '';
-    closeImmersive();
-  }, 430);
+  setTimeout(finishCloseImmersive, 430);
 }
 
 function startSettle(toIndex) {
@@ -461,7 +472,7 @@ function attachMotionHandlers() {
 
 function addMessageButton() {
   if ($('#message_template .mes_immersive_mode_button').length) return;
-  const button = $('<div title="Open immersive mode" class="mes_button mes_immersive_mode_button fa-solid fa-eye interactable" tabindex="0"></div>');
+  const button = $('<div title="Open immersive reader" class="mes_button mes_immersive_mode_button fa-solid fa-book-open interactable" tabindex="0"></div>');
   $('#message_template .mes_buttons .extraMesButtons').prepend(button);
   updateMessageButtonVisibility();
 }
@@ -534,6 +545,9 @@ function exposePublicApi() {
       beats = buildBeatsFromMessage({ mes: String(html || ''), name, is_user: false, is_system: false }, 'debug');
       resetMotion();
       renderBeats();
+      overlay.classList.remove('im-closing');
+      overlay.style.opacity = '';
+      overlay.style.transition = '';
       overlay.classList.add('im-open');
       document.body.classList.add('immersive-mode-active');
       applyOverlaySettings();
