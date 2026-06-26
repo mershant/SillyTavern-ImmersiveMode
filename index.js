@@ -347,21 +347,26 @@ function paint() {
     const d = i - visual;
     const y = mid + d * step;
     const dn = Math.abs(d);
-    const farLimit = contextPreview ? 2.6 : 1.15;
+    const farLimit = contextPreview ? 3.0 : 1.35;
     if (dn > farLimit) {
       el.style.visibility = 'hidden';
       el.style.opacity = '0';
       el.style.filter = 'none';
       return;
     }
-    let opacity = 1 - smoothstep(dn / 0.92);
-    opacity = Math.pow(Math.max(0, opacity), 1.52);
-    let ghostOpacity = 0;
-    if (contextPreview && opacity <= 0.004 && dn < 2.2) {
-      const baseGhost = displayMode === 'spotlight' ? 0.10 : displayMode === 'rotary' ? 0.18 : 0.22;
-      ghostOpacity = baseGhost * (1 - smoothstep((dn - 0.92) / 1.28));
+
+    let opacity;
+    if (contextPreview) {
+      // Continuous curves: no hard switch between active and ghost states.
+      // This removes the blink/pop when previous/next text crosses the spotlight edge.
+      const activeCurve = Math.exp(-Math.pow(dn / 0.48, 2));
+      const baseGhost = displayMode === 'spotlight' ? 0.12 : displayMode === 'rotary' ? 0.24 : 0.30;
+      const ghostTail = baseGhost * Math.exp(-dn / 1.35);
+      opacity = Math.min(1, activeCurve + ghostTail);
+    } else {
+      opacity = Math.exp(-Math.pow(dn / 0.40, 2));
     }
-    opacity = Math.max(opacity, ghostOpacity);
+
     const scale = displayMode === 'teleprompter'
       ? 0.82 + 0.18 * Math.min(1, opacity * 3)
       : 0.9 + 0.1 * Math.min(1, opacity * 4);
@@ -369,8 +374,9 @@ function paint() {
     const rot = displayMode === 'rotary' ? ` rotateX(${clamp(d, -2, 2) * -34}deg)` : '';
     el.style.transform = `translate3d(0, ${(y - mid - half).toFixed(2)}px, 0)${rot} scale(${scale.toFixed(3)})`;
     el.style.opacity = opacity.toFixed(3);
-    el.style.filter = ghostOpacity > 0 && displayMode !== 'teleprompter' ? 'blur(1.5px)' : 'none';
-    el.style.visibility = opacity < 0.004 ? 'hidden' : 'visible';
+    const blur = contextPreview && dn > 0.25 ? Math.min(2.2, dn * 1.15) : 0;
+    el.style.filter = blur > 0.03 ? `blur(${blur.toFixed(2)}px)` : 'none';
+    el.style.visibility = opacity < 0.002 ? 'hidden' : 'visible';
   });
   const progress = beats.length > 0 ? visual / beats.length : 0;
   fill.style.width = `${clamp(progress, 0, 1) * 100}%`;
