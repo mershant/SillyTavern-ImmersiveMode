@@ -15,6 +15,7 @@ const DEFAULT_SETTINGS = {
   showButton: true,
   scrollMode: 'threshold',
   extractionMode: 'sentence',
+  displayMode: 'spotlight',
   position: 'center',
   weight: 'heavy',
   material: 'pearl',
@@ -338,26 +339,37 @@ function paint() {
   const mid = overlay.clientHeight / 2;
   const baseStep = Number(getSettings().spread) || DEFAULT_SETTINGS.spread;
   const fontSize = Number(getSettings().fontSize) || DEFAULT_SETTINGS.fontSize;
-  const contextPreview = !!getSettings().contextPreview;
+  const settings = getSettings();
+  const displayMode = settings.displayMode || 'spotlight';
+  const contextPreview = !!settings.contextPreview || displayMode === 'teleprompter' || displayMode === 'rotary';
   const step = Math.max(baseStep, fontSize * 4.3);
   elements.forEach((el, i) => {
     const d = i - visual;
     const y = mid + d * step;
     const dn = Math.abs(d);
-    if (dn > (contextPreview ? 2.4 : 2.2)) {
+    const farLimit = contextPreview ? 2.6 : 1.15;
+    if (dn > farLimit) {
       el.style.visibility = 'hidden';
       el.style.opacity = '0';
+      el.style.filter = 'none';
       return;
     }
     let opacity = 1 - smoothstep(dn / 0.92);
     opacity = Math.pow(Math.max(0, opacity), 1.52);
-    const ghostOpacity = contextPreview && opacity <= 0.004 && dn < 1.85 ? 0.11 * (1 - smoothstep((dn - 0.92) / 0.93)) : 0;
+    let ghostOpacity = 0;
+    if (contextPreview && opacity <= 0.004 && dn < 2.2) {
+      const baseGhost = displayMode === 'spotlight' ? 0.10 : displayMode === 'rotary' ? 0.18 : 0.22;
+      ghostOpacity = baseGhost * (1 - smoothstep((dn - 0.92) / 1.28));
+    }
     opacity = Math.max(opacity, ghostOpacity);
-    const scale = 0.9 + 0.1 * opacity;
+    const scale = displayMode === 'teleprompter'
+      ? 0.82 + 0.18 * Math.min(1, opacity * 3)
+      : 0.9 + 0.1 * Math.min(1, opacity * 4);
     const half = halfHeights[i] || 0;
-    el.style.transform = `translate3d(0, ${(y - mid - half).toFixed(2)}px, 0) scale(${scale.toFixed(3)})`;
+    const rot = displayMode === 'rotary' ? ` rotateX(${clamp(d, -2, 2) * -34}deg)` : '';
+    el.style.transform = `translate3d(0, ${(y - mid - half).toFixed(2)}px, 0)${rot} scale(${scale.toFixed(3)})`;
     el.style.opacity = opacity.toFixed(3);
-    el.style.filter = ghostOpacity > 0 ? 'blur(2px)' : 'none';
+    el.style.filter = ghostOpacity > 0 && displayMode !== 'teleprompter' ? 'blur(1.5px)' : 'none';
     el.style.visibility = opacity < 0.004 ? 'hidden' : 'visible';
   });
   const progress = beats.length > 0 ? visual / beats.length : 0;
@@ -476,6 +488,7 @@ async function addSettingsUi() {
   container.find('.im_hide_st_chrome').prop('checked', settings.hideStChrome).on('change', function () { settings.hideStChrome = !!$(this).prop('checked'); saveSettings(); applyOverlaySettings(); });
   container.find('.im_context_preview').prop('checked', settings.contextPreview).on('change', function () { settings.contextPreview = !!$(this).prop('checked'); saveSettings(); paint(); });
   container.find('.im_extraction_mode').val(settings.extractionMode).on('change', function () { settings.extractionMode = String($(this).val() || 'sentence'); saveSettings(); if (overlay && activeMessageId !== null) renderBeats(); });
+  container.find('.im_display_mode').val(settings.displayMode).on('change', function () { settings.displayMode = String($(this).val() || 'spotlight'); saveSettings(); paint(); });
   container.find('.im_position').val(settings.position).on('change', function () { settings.position = String($(this).val() || 'center'); saveSettings(); applyOverlaySettings(); });
   container.find('.im_scroll_mode').val(settings.scrollMode).on('change', function () { settings.scrollMode = String($(this).val() || 'threshold'); saveSettings(); });
   container.find('.im_weight').val(settings.weight).on('change', function () { settings.weight = String($(this).val() || 'heavy'); saveSettings(); });
