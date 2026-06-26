@@ -1,6 +1,16 @@
 body.immersive-mode-active #chat {
-  opacity: 0.04;
+  opacity: 0.16;
   transition: opacity 220ms ease;
+}
+
+body.immersive-mode-active::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 99998;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.46);
+  backdrop-filter: blur(1.25px) saturate(0.9);
 }
 
 body.immersive-mode-active.im-hide-st-chrome #top-bar,
@@ -17,7 +27,7 @@ body.immersive-mode-active.im-hide-st-chrome #form_sheld {
 .im-overlay {
   position: fixed;
   inset: 48px 0 105px 0;
-  z-index: 4999;
+  z-index: 99999;
   background: transparent;
   color: #f6f3eb;
   overflow: hidden;
