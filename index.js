@@ -101,9 +101,10 @@ function splitLongPlain(text) {
   const source = String(text || '').trim();
   if (!source) return [];
   const settings = getSettings();
-  const maxShort = settings.extractionMode === 'balanced' ? 130 : 55;
+  const sentenceMode = settings.extractionMode === 'sentence';
+  const maxShort = settings.extractionMode === 'balanced' ? 130 : 0;
   const maxSentence = settings.extractionMode === 'balanced' ? 155 : 115;
-  if (source.length <= maxShort) return [source];
+  if (!sentenceMode && source.length <= maxShort) return [source];
   const paraParts = source.split(/\n{2,}/).map(x => x.trim()).filter(Boolean);
   const out = [];
   for (const para of paraParts) {
@@ -269,8 +270,20 @@ function closeImmersive() {
   document.body.classList.remove('immersive-mode-active', 'im-hide-st-chrome');
 }
 
+function fadeCloseImmersive() {
+  if (!overlay?.classList.contains('im-open')) return;
+  overlay.style.transition = 'opacity 420ms ease';
+  overlay.style.opacity = '0';
+  setTimeout(() => {
+    overlay.style.opacity = '';
+    overlay.style.transition = '';
+    closeImmersive();
+  }, 430);
+}
+
 function startSettle(toIndex) {
-  toIndex = clamp(toIndex, 0, beats.length - 1);
+  // beats.length is a valid sentinel: the empty END state after the last beat.
+  toIndex = clamp(toIndex, 0, beats.length);
   const current = index + offset;
   settleFrom = current;
   settleTo = toIndex;
@@ -284,6 +297,11 @@ function thresholdResolve() {
   const settings = getSettings();
   if (settings.scrollMode !== 'threshold') return;
   const threshold = Number(settings.threshold) || getWeight().threshold;
+  // At empty END: another downward scroll exits back to chat.
+  if (index >= beats.length && offset >= threshold && settings.fadeOnEnd) {
+    fadeCloseImmersive();
+    return;
+  }
   if (offset >= threshold) startSettle(index + 1);
   else if (offset <= -threshold) startSettle(index - 1);
 }
@@ -311,9 +329,9 @@ function paint() {
     el.style.filter = blur < 0.05 ? 'none' : `blur(${blur.toFixed(2)}px)`;
     el.style.visibility = opacity < 0.004 ? 'hidden' : 'visible';
   });
-  const progress = beats.length > 1 ? visual / (beats.length - 1) : 0;
+  const progress = beats.length > 0 ? visual / beats.length : 0;
   fill.style.width = `${clamp(progress, 0, 1) * 100}%`;
-  meta.textContent = `${Math.round(visual) + 1} / ${beats.length}`;
+  meta.textContent = index >= beats.length ? 'END' : `${Math.round(visual) + 1} / ${beats.length}`;
 }
 
 function loop(ts) {
@@ -324,15 +342,10 @@ function loop(ts) {
     if (settling) {
       const t = clamp((ts - settleStart) / settleDur, 0, 1);
       const cur = settleFrom + (settleTo - settleFrom) * easeOutCubic(t);
-      index = Math.floor(clamp(settleTo, 0, beats.length - 1));
+      index = Math.floor(clamp(settleTo, 0, beats.length));
       offset = cur - index;
       if (t >= 1) {
         index = settleTo; offset = 0; settling = false;
-        if (getSettings().fadeOnEnd && index >= beats.length - 1) {
-          overlay.style.transition = 'opacity 420ms ease';
-          overlay.style.opacity = '0';
-          setTimeout(() => { overlay.style.opacity = ''; overlay.style.transition = ''; closeImmersive(); }, 430);
-        }
       }
     } else if (!dragging) {
       offset += velocity * frames;
@@ -352,7 +365,11 @@ function attachMotionHandlers() {
     event.preventDefault();
     inputStarted();
     const settings = getSettings();
-    if (settings.scrollMode === 'step') { startSettle(index + (event.deltaY > 0 ? 1 : -1)); return; }
+    if (settings.scrollMode === 'step') {
+      if (index >= beats.length && event.deltaY > 0 && settings.fadeOnEnd) fadeCloseImmersive();
+      else startSettle(index + (event.deltaY > 0 ? 1 : -1));
+      return;
+    }
     const weight = getWeight();
     velocity += event.deltaY * weight.wheel;
     offset += event.deltaY * weight.wheel * 0.45;
@@ -383,7 +400,11 @@ function attachMotionHandlers() {
 
   document.addEventListener('keydown', event => {
     if (!overlay?.classList.contains('im-open')) return;
-    if (['ArrowDown', 'ArrowRight', 'Space'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(index + 1); }
+    if (['ArrowDown', 'ArrowRight', 'Space'].includes(event.code)) {
+      event.preventDefault(); event.stopPropagation();
+      if (index >= beats.length && getSettings().fadeOnEnd) fadeCloseImmersive();
+      else startSettle(index + 1);
+    }
     if (['ArrowUp', 'ArrowLeft'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(index - 1); }
     if (event.code === 'Escape') { event.preventDefault(); event.stopPropagation(); closeImmersive(); }
   }, true);
