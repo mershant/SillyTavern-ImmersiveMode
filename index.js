@@ -26,6 +26,7 @@ const DEFAULT_SETTINGS = {
   showInModeControls: true,
   hideStChrome: false,
   contextPreview: true,
+  preventCodeHtmlCapture: true,
   emphasisAtomicMax: 140,
 };
 
@@ -90,13 +91,29 @@ function escapeHtml(value) {
 }
 
 function normalizeMessageText(html) {
+  const settings = getSettings();
   const div = document.createElement('div');
   div.innerHTML = String(html || '');
   div.querySelectorAll('script, style, .directional-roadway-panel').forEach(x => x.remove());
+  if (settings.preventCodeHtmlCapture) {
+    div.querySelectorAll('pre, code, kbd, samp').forEach(x => x.remove());
+  }
   div.querySelectorAll('br').forEach(x => x.replaceWith('\n'));
   div.querySelectorAll('strong, b').forEach(el => el.replaceWith(document.createTextNode(`==${el.textContent || ''}==`)));
   div.querySelectorAll('em, i').forEach(el => el.replaceWith(document.createTextNode(`*${el.textContent || ''}*`)));
-  return (div.textContent || '').replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim();
+  let text = (div.textContent || '').replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim();
+  if (settings.preventCodeHtmlCapture) {
+    text = text
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/`[^`]*`/g, ' ')
+      .replace(/<([a-z][\w:-]*)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+      .replace(/&lt;([a-z][\w:-]*)\b[\s\S]*?&lt;\/\1&gt;/gi, ' ')
+      .replace(/<\/?[a-z][^>]*>/gi, ' ')
+      .replace(/&lt;\/?[a-z][\s\S]*?&gt;/gi, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+  return text;
 }
 
 function renderBeatHtml(text) {
@@ -512,6 +529,7 @@ async function addSettingsUi() {
   container.find('.im_show_inmode_controls').prop('checked', settings.showInModeControls).on('change', function () { settings.showInModeControls = !!$(this).prop('checked'); saveSettings(); applyOverlaySettings(); });
   container.find('.im_hide_st_chrome').prop('checked', settings.hideStChrome).on('change', function () { settings.hideStChrome = !!$(this).prop('checked'); saveSettings(); applyOverlaySettings(); });
   container.find('.im_context_preview').prop('checked', settings.contextPreview).on('change', function () { settings.contextPreview = !!$(this).prop('checked'); saveSettings(); paint(); });
+  container.find('.im_prevent_code_html').prop('checked', settings.preventCodeHtmlCapture).on('change', function () { settings.preventCodeHtmlCapture = !!$(this).prop('checked'); saveSettings(); if (overlay && activeMessageId !== null) renderBeats(); });
   container.find('.im_extraction_mode').val(settings.extractionMode).on('change', function () { settings.extractionMode = String($(this).val() || 'sentence'); saveSettings(); if (overlay && activeMessageId !== null) renderBeats(); });
   container.find('.im_display_mode').val(settings.displayMode).on('change', function () { settings.displayMode = String($(this).val() || 'spotlight'); saveSettings(); paint(); });
   container.find('.im_position').val(settings.position).on('change', function () { settings.position = String($(this).val() || 'center'); saveSettings(); applyOverlaySettings(); });
