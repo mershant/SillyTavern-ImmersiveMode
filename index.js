@@ -468,6 +468,14 @@ function attachMotionHandlers() {
     if (['ArrowUp', 'ArrowLeft'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(index - 1); }
     if (event.code === 'Escape') { event.preventDefault(); event.stopPropagation(); closeImmersive(); }
   }, true);
+
+  window.addEventListener('resize', () => {
+    if (!overlay?.classList.contains('im-open')) return;
+    requestAnimationFrame(() => {
+      halfHeights = elements.map(el => el.offsetHeight / 2);
+      paint();
+    });
+  });
 }
 
 function addMessageButton() {

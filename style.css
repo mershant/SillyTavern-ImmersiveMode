@@ -41,6 +41,8 @@ body.immersive-mode-active.im-hide-st-chrome #form_sheld {
   cursor: grab;
   touch-action: none;
   pointer-events: auto;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .im-stage.im-drag { cursor: grabbing; }
@@ -159,6 +161,7 @@ body.immersive-mode-active.im-hide-st-chrome #form_sheld {
   font-family: system-ui, sans-serif;
   opacity: .72;
   transition: opacity 180ms ease;
+  pointer-events: auto;
 }
 .im-controls:hover { opacity: 1; }
 .im-overlay:not(.im-show-controls) .im-controls { display: none; }
@@ -189,3 +192,77 @@ body.immersive-mode-active.im-hide-st-chrome #form_sheld {
 .im-fill { height: 100%; width: 0; background: linear-gradient(90deg,rgba(180,205,255,.7),#ffcf6b); }
 .im-meta { font-size: 10.5px; color: #5d6573; letter-spacing: 1px; }
 .im-overlay:not(.im-show-progress) .im-hud { display: none; }
+
+@media (max-width: 900px), (pointer: coarse) {
+  body.immersive-mode-active #chat { opacity: 0.025; }
+
+  .im-overlay,
+  .im-overlay.im-hide-chrome {
+    inset: 0;
+    min-height: 100dvh;
+  }
+
+  .im-stage {
+    inset: 0;
+    min-height: 100dvh;
+  }
+
+  .im-world {
+    width: min(92vw, 620px);
+  }
+
+  .im-position-top .im-world { top: 24%; }
+  .im-position-center .im-world { top: 48%; }
+  .im-position-bottom .im-world { top: 66%; }
+
+  .im-beat {
+    font-size: clamp(22px, 6.3vw, var(--im-font-size, 38px));
+    line-height: 1.48;
+    letter-spacing: .05px;
+  }
+
+  .im-who {
+    font-size: 10px;
+    margin-bottom: 8px;
+    letter-spacing: 2px;
+  }
+
+  .im-close {
+    top: calc(env(safe-area-inset-top, 0px) + 10px);
+    right: 10px;
+    padding: 8px 12px;
+  }
+
+  .im-controls {
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 58px);
+    width: min(92vw, 420px);
+    justify-content: center;
+    gap: 6px;
+    opacity: .82;
+  }
+
+  .im-control-pill {
+    padding: 8px 11px;
+    font-size: 12px;
+  }
+
+  .im-control-range {
+    width: min(38vw, 160px);
+  }
+
+  .im-hud {
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 20px);
+  }
+
+  .im-rail {
+    width: min(58vw, 260px);
+  }
+}
+
+@media (max-width: 420px) {
+  .im-beat {
+    font-size: clamp(20px, 6.1vw, 32px);
+    line-height: 1.45;
+  }
+  .im-controls { transform: translateX(-50%) scale(.92); }
+}
