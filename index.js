@@ -24,6 +24,8 @@ const DEFAULT_SETTINGS = {
   fadeOnEnd: true,
   showInModeControls: true,
   hideStChrome: false,
+  contextPreview: false,
+  emphasisAtomicMax: 140,
 };
 
 const extensionName = (() => {
@@ -137,7 +139,14 @@ function tokenizeIntoBeats(text) {
   while ((match = atomRe.exec(src))) {
     const before = src.slice(last, match.index).trim();
     if (before) out.push(...splitLongPlain(before));
-    out.push(match[0].trim());
+    const atom = match[0].trim();
+    if (atom.startsWith('*') && atom.endsWith('*')) {
+      const inner = atom.slice(1, -1).trim();
+      if (inner.length <= (Number(getSettings().emphasisAtomicMax) || DEFAULT_SETTINGS.emphasisAtomicMax)) out.push(atom);
+      else out.push(...splitLongPlain(inner).map(piece => `*${piece}*`));
+    } else {
+      out.push(atom);
+    }
     last = match.index + match[0].length;
   }
   const after = src.slice(last).trim();
@@ -324,23 +333,26 @@ function paint() {
   const mid = overlay.clientHeight / 2;
   const baseStep = Number(getSettings().spread) || DEFAULT_SETTINGS.spread;
   const fontSize = Number(getSettings().fontSize) || DEFAULT_SETTINGS.fontSize;
+  const contextPreview = !!getSettings().contextPreview;
   const step = Math.max(baseStep, fontSize * 4.3);
   elements.forEach((el, i) => {
     const d = i - visual;
     const y = mid + d * step;
     const dn = Math.abs(d);
-    if (dn > 2.2) {
+    if (dn > (contextPreview ? 2.4 : 2.2)) {
       el.style.visibility = 'hidden';
       el.style.opacity = '0';
       return;
     }
     let opacity = 1 - smoothstep(dn / 0.92);
-    opacity = Math.pow(opacity, 1.52);
+    opacity = Math.pow(Math.max(0, opacity), 1.52);
+    const ghostOpacity = contextPreview && opacity <= 0.004 && dn < 1.85 ? 0.11 * (1 - smoothstep((dn - 0.92) / 0.93)) : 0;
+    opacity = Math.max(opacity, ghostOpacity);
     const scale = 0.9 + 0.1 * opacity;
     const half = halfHeights[i] || 0;
     el.style.transform = `translate3d(0, ${(y - mid - half).toFixed(2)}px, 0) scale(${scale.toFixed(3)})`;
     el.style.opacity = opacity.toFixed(3);
-    el.style.filter = 'none';
+    el.style.filter = ghostOpacity > 0 ? 'blur(2px)' : 'none';
     el.style.visibility = opacity < 0.004 ? 'hidden' : 'visible';
   });
   const progress = beats.length > 0 ? visual / beats.length : 0;
@@ -457,6 +469,7 @@ async function addSettingsUi() {
   container.find('.im_fade_on_end').prop('checked', settings.fadeOnEnd).on('change', function () { settings.fadeOnEnd = !!$(this).prop('checked'); saveSettings(); });
   container.find('.im_show_inmode_controls').prop('checked', settings.showInModeControls).on('change', function () { settings.showInModeControls = !!$(this).prop('checked'); saveSettings(); applyOverlaySettings(); });
   container.find('.im_hide_st_chrome').prop('checked', settings.hideStChrome).on('change', function () { settings.hideStChrome = !!$(this).prop('checked'); saveSettings(); applyOverlaySettings(); });
+  container.find('.im_context_preview').prop('checked', settings.contextPreview).on('change', function () { settings.contextPreview = !!$(this).prop('checked'); saveSettings(); paint(); });
   container.find('.im_extraction_mode').val(settings.extractionMode).on('change', function () { settings.extractionMode = String($(this).val() || 'sentence'); saveSettings(); if (overlay && activeMessageId !== null) renderBeats(); });
   container.find('.im_position').val(settings.position).on('change', function () { settings.position = String($(this).val() || 'center'); saveSettings(); applyOverlaySettings(); });
   container.find('.im_scroll_mode').val(settings.scrollMode).on('change', function () { settings.scrollMode = String($(this).val() || 'threshold'); saveSettings(); });
