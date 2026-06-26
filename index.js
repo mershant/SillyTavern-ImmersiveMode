@@ -104,10 +104,12 @@ function splitLongPlain(text) {
   const source = String(text || '').trim();
   if (!source) return [];
   const settings = getSettings();
-  const sentenceMode = settings.extractionMode === 'sentence';
-  const maxShort = settings.extractionMode === 'balanced' ? 130 : 0;
-  const maxSentence = settings.extractionMode === 'balanced' ? 155 : 72;
-  if (!sentenceMode && source.length <= maxShort) return [source];
+  const mode = settings.extractionMode || 'sentence';
+  const sentenceMode = mode === 'sentence';
+  const punctuationMode = mode === 'punctuation';
+  const maxShort = mode === 'balanced' ? 130 : 0;
+  const maxSentence = mode === 'balanced' ? 155 : 72;
+  if (!sentenceMode && !punctuationMode && source.length <= maxShort) return [source];
   const paraParts = source.split(/\n{2,}/).map(x => x.trim()).filter(Boolean);
   const out = [];
   for (const para of paraParts) {
@@ -118,9 +120,12 @@ function splitLongPlain(text) {
       sentences = para.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
     }
     for (const sentence of (sentences.length ? sentences : [para])) {
-      if (sentence.length <= maxSentence) out.push(sentence);
-      else {
-        const clausePattern = settings.extractionMode === 'sentence' ? /(?<=,|—|;|:)\s+/ : /(?<=—|;|:)\s+/;
+      if (sentenceMode) {
+        out.push(sentence);
+      } else if (sentence.length <= maxSentence) {
+        out.push(sentence);
+      } else {
+        const clausePattern = punctuationMode ? /(?<=,|—|;|:)\s+/ : /(?<=—|;|:)\s+/;
         const clauses = sentence.split(clausePattern).map(x => x.trim()).filter(Boolean);
         out.push(...(clauses.length > 1 ? clauses : [sentence]));
       }
@@ -520,6 +525,11 @@ function exposePublicApi() {
     },
     debugSegmentHtml(html) {
       return buildBeatsFromMessage({ mes: String(html || ''), name: 'debug', is_user: false, is_system: false }, 'debug').map(b => stripTags(b.html));
+    },
+    debugSetSettings(next) {
+      Object.assign(getSettings(), next || {});
+      saveSettings();
+      if (overlay) applyOverlaySettings();
     },
   };
 }
