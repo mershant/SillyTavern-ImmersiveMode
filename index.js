@@ -107,8 +107,8 @@ function normalizeMessageText(html) {
     text = text
       .replace(/```[\s\S]*?```/g, ' ')
       .replace(/`[^`]*`/g, ' ')
-      .replace(/<([a-z][\w:-]*)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
-      .replace(/&lt;([a-z][\w:-]*)\b[\s\S]*?&lt;\/\1&gt;/gi, ' ')
+      .replace(/<(script|style|pre|code|kbd|samp)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+      .replace(/&lt;(script|style|pre|code|kbd|samp)\b[\s\S]*?&lt;\/\1&gt;/gi, ' ')
       .replace(/<\/?[a-z][^>]*>/gi, ' ')
       .replace(/&lt;\/?[a-z][\s\S]*?&gt;/gi, ' ')
       .replace(/\n{3,}/g, '\n\n')
