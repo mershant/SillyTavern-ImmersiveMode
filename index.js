@@ -61,6 +61,7 @@ let activeMessageId = null;
 let beats = [];
 let index = 0;
 let visual = 0;
+let targetVisual = 0;
 let dragging = false;
 let dragStartX = 0;
 let dragStartY = 0;
@@ -68,6 +69,7 @@ let dragStartOffset = 0;
 let dragStartVisual = 0;
 let offset = 0;
 let transitionRaf = null;
+let dragRaf = null;
 let targetIndex = 0;
 let dragStartTargetIndex = 0;
 let streamingMessageId = null;
@@ -225,7 +227,7 @@ function createOverlay() {
   attachMotionHandlers();
 }
 
-function resetMotion() { index = 0; targetIndex = 0; visual = 0; offset = 0; dragging = false; }
+function resetMotion() { index = 0; targetIndex = 0; visual = 0; targetVisual = 0; offset = 0; dragging = false; }
 function adjustFontSize(delta) { const settings = getSettings(); settings.fontSize = clamp((Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize) + delta, 18, 64); saveSettings(); applyOverlaySettings(); paint(); }
 
 function applyOverlaySettings() {
@@ -335,6 +337,7 @@ function updateStreamingMessage() {
   index = clamp(index, 0, Math.max(0, beats.length - 1));
   targetIndex = clamp(targetIndex, 0, Math.max(0, beats.length - 1));
   visual = clamp(visual, 0, Math.max(0, beats.length - 1));
+  targetVisual = clamp(targetVisual, 0, Math.max(0, beats.length - 1));
   host.classList.remove('closing'); host.style.opacity = ''; host.style.transition = '';
   host.classList.add('open');
   document.body.classList.add('immersive-mode-active');
@@ -351,8 +354,10 @@ function startSettle(toIndex) {
   targetIndex = toIndex;
   if (toIndex >= beats.length && index >= beats.length && getSettings().fadeOnEnd) { fadeCloseImmersive(); return; }
   if (transitionRaf) cancelAnimationFrame(transitionRaf);
+  if (dragRaf) { cancelAnimationFrame(dragRaf); dragRaf = null; }
   const from = visual;
   const to = toIndex;
+  targetVisual = toIndex;
   const start = performance.now();
   const dur = getWeight().dur;
   function step(now) {
@@ -373,15 +378,38 @@ function thresholdResolve() {
 }
 function getWeight() { return WEIGHTS[getSettings().weight] || WEIGHTS.heavy; }
 
+function updateFromVisualPosition() {
+  index = Math.floor(clamp(visual, 0, Math.max(0, beats.length - 1)));
+  targetIndex = Math.round(clamp(visual, 0, beats.length));
+  offset = visual - index;
+}
+
+function smoothDragTo(nextTarget) {
+  targetVisual = clamp(nextTarget, 0, beats.length);
+  if (dragRaf) return;
+  const step = () => {
+    const diff = targetVisual - visual;
+    if (Math.abs(diff) < 0.001) {
+      visual = targetVisual;
+      updateFromVisualPosition();
+      paint();
+      dragRaf = null;
+      return;
+    }
+    visual += diff * 0.22;
+    updateFromVisualPosition();
+    paint();
+    dragRaf = requestAnimationFrame(step);
+  };
+  dragRaf = requestAnimationFrame(step);
+}
+
 function inputStarted() {
   if (transitionRaf) {
     cancelAnimationFrame(transitionRaf);
     transitionRaf = null;
   }
-  // Preserve the actual on-screen position when user interrupts an animation.
-  index = Math.floor(clamp(visual, 0, Math.max(0, beats.length - 1)));
-  targetIndex = Math.round(clamp(visual, 0, beats.length));
-  offset = visual - index;
+  updateFromVisualPosition();
 }
 
 function attachMotionHandlers() {
@@ -394,25 +422,18 @@ function attachMotionHandlers() {
       return;
     }
     inputStarted();
-    visual = clamp(visual + event.deltaY * getWeight().wheel, 0, beats.length);
-    index = Math.floor(clamp(visual, 0, Math.max(0, beats.length - 1)));
-    targetIndex = Math.round(clamp(visual, 0, beats.length));
-    offset = visual - index;
-    paint();
-    clearTimeout(stage._imWheelTimer);
-    stage._imWheelTimer = setTimeout(thresholdResolve, 120);
+    smoothDragTo(targetVisual + event.deltaY * getWeight().wheel);
   }, { passive: false });
-  stage.addEventListener('pointerdown', event => { dragging = true; inputStarted(); dragStartX = event.clientX; dragStartY = event.clientY; dragStartVisual = visual; dragStartOffset = offset; stage.classList.add('drag'); stage.setPointerCapture(event.pointerId); });
+  stage.addEventListener('pointerdown', event => { dragging = true; inputStarted(); if (dragRaf) { cancelAnimationFrame(dragRaf); dragRaf = null; } dragStartX = event.clientX; dragStartY = event.clientY; dragStartVisual = visual; dragStartOffset = offset; stage.classList.add('drag'); stage.setPointerCapture(event.pointerId); });
   stage.addEventListener('pointermove', event => {
     if (!dragging) return;
     const stepSize = Math.max(Number(getSettings().spread) || DEFAULT_SETTINGS.spread, (Number(getSettings().fontSize) || DEFAULT_SETTINGS.fontSize) * 4.1);
     visual = clamp(dragStartVisual - (event.clientY - dragStartY) / stepSize, 0, beats.length);
-    index = Math.floor(clamp(visual, 0, Math.max(0, beats.length - 1)));
-    targetIndex = Math.round(clamp(visual, 0, beats.length));
-    offset = visual - index;
+    targetVisual = visual;
+    updateFromVisualPosition();
     paint();
   });
-  stage.addEventListener('pointerup', event => { dragging = false; stage.classList.remove('drag'); const dx = event.clientX - dragStartX; const dy = event.clientY - dragStartY; if (getSettings().mobileSwipeNavigation && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.25) { offset = 0; startSettle(targetIndex + (dx < 0 ? 1 : -1)); return; } thresholdResolve(); });
+  stage.addEventListener('pointerup', event => { dragging = false; stage.classList.remove('drag'); const dx = event.clientX - dragStartX; const dy = event.clientY - dragStartY; if (getSettings().mobileSwipeNavigation && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.25) { offset = 0; startSettle(targetIndex + (dx < 0 ? 1 : -1)); return; } if (getSettings().scrollBehavior !== 'drag') thresholdResolve(); });
   document.addEventListener('keydown', event => { if (!host?.classList.contains('open')) return; if (['ArrowDown', 'ArrowRight', 'Space'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(targetIndex + 1); } if (['ArrowUp', 'ArrowLeft'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(targetIndex - 1); } if (event.code === 'Escape') { event.preventDefault(); event.stopPropagation(); closeImmersive(); } }, true);
 }
 
@@ -445,18 +466,29 @@ async function addSettingsUi() {
   container.find('.im_display_mode').val(settings.displayMode).on('change', function () { settings.displayMode = String($(this).val() || 'rotary'); saveSettings(); paint(); });
   container.find('.im_position').val(settings.position).on('change', function () { settings.position = String($(this).val() || 'center'); saveSettings(); });
   container.find('.im_scroll_mode').val(settings.scrollMode).on('change', function () { settings.scrollMode = String($(this).val() || 'threshold'); saveSettings(); });
+  container.find('.im_scroll_behavior').val(settings.scrollBehavior).on('change', function () { settings.scrollBehavior = String($(this).val() || 'drag'); saveSettings(); });
   container.find('.im_weight').val(settings.weight).on('change', function () { settings.weight = String($(this).val() || 'heavy'); saveSettings(); });
   container.find('.im_material').val(settings.material).on('change', function () { settings.material = String($(this).val() || 'pearl'); saveSettings(); applyOverlaySettings(); });
   container.find('.im_threshold').val(settings.threshold).on('input change', function () { settings.threshold = Number($(this).val()) || DEFAULT_SETTINGS.threshold; saveSettings(); });
   container.find('.im_font_size').val(settings.fontSize).on('input change', function () { settings.fontSize = Number($(this).val()) || DEFAULT_SETTINGS.fontSize; saveSettings(); applyOverlaySettings(); paint(); });
   container.find('.im_spread').val(settings.spread).on('input change', function () { settings.spread = Number($(this).val()) || DEFAULT_SETTINGS.spread; saveSettings(); paint(); });
+  container.find('.im_preview_both').val(Math.max(settings.previewAhead, settings.previewBehind)).on('input change', function () {
+    const value = Number($(this).val()) || 0;
+    settings.previewAhead = value;
+    settings.previewBehind = value;
+    container.find('.im_preview_ahead').val(value);
+    container.find('.im_preview_behind').val(value);
+    saveSettings(); paint();
+  });
+  container.find('.im_preview_ahead').val(settings.previewAhead).on('input change', function () { settings.previewAhead = Number($(this).val()) || 0; saveSettings(); paint(); });
+  container.find('.im_preview_behind').val(settings.previewBehind).on('input change', function () { settings.previewBehind = Number($(this).val()) || 0; saveSettings(); paint(); });
   container.find('.im_open_now').on('click', openLatestAssistant);
   container.find('.im_close_now').on('click', closeImmersive);
 }
 
 function registerEvents() { eventSource.makeLast(event_types.CHARACTER_MESSAGE_RENDERED, (messageId, type) => { const message = chat[messageId]; if (!message || message.is_user || message.is_system) return; if (getSettings().autoOpen && ['normal', 'continue', 'swipe'].includes(type || 'normal')) openMessage(Number(messageId)); }); eventSource.on(event_types.STREAM_TOKEN_RECEIVED, updateStreamingMessage); eventSource.on(event_types.CHAT_CHANGED, closeImmersive); }
 function registerSlashCommand() { SlashCommandParser.addCommandObject(SlashCommand.fromProps({ name: 'immersive', callback: () => { openLatestAssistant(); return ''; }, helpString: 'Open Immersive Mode for the latest assistant message.' })); }
-function exposePublicApi() { globalThis.SillyTavernImmersiveMode = { openLatest: openLatestAssistant, openMessage, close: closeImmersive, debugOpenHtml(html, name = 'Seraphine') { createOverlay(); activeMessageId = -1; beats = buildBeatsFromMessage({ mes: String(html || ''), name, is_user: false, is_system: false }, 'debug'); resetMotion(); host.classList.remove('closing'); host.style.opacity = ''; host.style.transition = ''; host.classList.add('open'); document.body.classList.add('immersive-mode-active'); applyOverlaySettings(); paint(); }, getState() { return { activeMessageId, beats: beats.map(b => stripTags(b.html)), index, targetIndex, visual, open: host?.classList.contains('open') || false, renderedLayers: layers.length }; }, debugSegmentHtml(html) { return buildBeatsFromMessage({ mes: String(html || ''), name: 'debug', is_user: false, is_system: false }, 'debug').map(b => stripTags(b.html)); }, debugSetSettings(next) { Object.assign(getSettings(), next || {}); saveSettings(); if (host) applyOverlaySettings(); } }; }
+function exposePublicApi() { globalThis.SillyTavernImmersiveMode = { openLatest: openLatestAssistant, openMessage, close: closeImmersive, debugOpenHtml(html, name = 'Seraphine') { createOverlay(); activeMessageId = -1; beats = buildBeatsFromMessage({ mes: String(html || ''), name, is_user: false, is_system: false }, 'debug'); resetMotion(); host.classList.remove('closing'); host.style.opacity = ''; host.style.transition = ''; host.classList.add('open'); document.body.classList.add('immersive-mode-active'); applyOverlaySettings(); paint(); }, getState() { return { activeMessageId, beats: beats.map(b => stripTags(b.html)), index, targetIndex, visual, targetVisual, open: host?.classList.contains('open') || false, renderedLayers: layers.length }; }, debugSegmentHtml(html) { return buildBeatsFromMessage({ mes: String(html || ''), name: 'debug', is_user: false, is_system: false }, 'debug').map(b => stripTags(b.html)); }, debugSetSettings(next) { Object.assign(getSettings(), next || {}); saveSettings(); if (host) applyOverlaySettings(); } }; }
 
 async function init() { if (initialized) return; initialized = true; getSettings(); await addSettingsUi(); createOverlay(); addMessageButton(); addSendButton(); attachDelegatedHandlers(); registerEvents(); registerSlashCommand(); exposePublicApi(); console.log('[Immersive Mode] Loaded layered reader engine.'); }
 init().catch(error => { console.error('[Immersive Mode] Init failed:', error); toastr?.error?.(`Init failed: ${error?.message || error}`, 'Immersive Mode'); });

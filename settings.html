@@ -53,8 +53,16 @@
         <label>Scroll Mode</label>
       </div>
       <select class="text_pole im_scroll_mode">
-        <option value="threshold">True free threshold</option>
+        <option value="threshold">Threshold</option>
         <option value="step">Single-step</option>
+      </select>
+
+      <div style="margin-top:10px">
+        <label>Scroll Behavior</label>
+      </div>
+      <select class="text_pole im_scroll_behavior">
+        <option value="drag">Drag / free position</option>
+        <option value="swipe">Swipe / one beat per scroll</option>
       </select>
 
       <div style="margin-top:10px">
@@ -92,6 +100,20 @@
       </div>
       <input type="range" class="im_spread" min="130" max="320" step="5" />
       <small>Distance between beats while scrolling; larger values give big text more breathing room.</small>
+
+      <h4 style="margin-top:14px">Context Preview Count</h4>
+      <div>
+        <label>Both</label>
+      </div>
+      <input type="range" class="im_preview_both" min="0" max="5" step="1" />
+      <div style="margin-top:8px">
+        <label>Ahead</label>
+      </div>
+      <input type="range" class="im_preview_ahead" min="0" max="5" step="1" />
+      <div style="margin-top:8px">
+        <label>Behind</label>
+      </div>
+      <input type="range" class="im_preview_behind" min="0" max="5" step="1" />
 
       <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap">
         <button class="menu_button im_open_now">Open latest assistant message</button>
