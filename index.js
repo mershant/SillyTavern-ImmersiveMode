@@ -14,6 +14,7 @@ const DEFAULT_SETTINGS = {
   showMessageIds: false,
   showButton: true,
   scrollMode: 'threshold',
+  scrollBehavior: 'drag',
   extractionMode: 'sentence',
   displayMode: 'rotary',
   position: 'center',
@@ -26,6 +27,8 @@ const DEFAULT_SETTINGS = {
   showInModeControls: true,
   hideStChrome: false,
   contextPreview: true,
+  previewAhead: 2,
+  previewBehind: 2,
   preventCodeHtmlCapture: true,
   excludeBracketPipes: true,
   mobileSwipeNavigation: true,
@@ -62,6 +65,7 @@ let dragging = false;
 let dragStartX = 0;
 let dragStartY = 0;
 let dragStartOffset = 0;
+let dragStartVisual = 0;
 let offset = 0;
 let transitionRaf = null;
 let targetIndex = 0;
@@ -208,9 +212,9 @@ function createOverlay() {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = host.attachShadow({ mode: 'open' });
-  root.innerHTML = `<style>${shadowCss()}</style><button class="close">exit</button><div class="stage"><div class="layer" data-role="-1"></div><div class="layer" data-role="0"></div><div class="layer" data-role="1"></div></div><div class="controls"><button class="pill font-down">A−</button><input class="range font-range" type="range" min="18" max="64" step="1"><button class="pill font-up">A+</button><button class="pill toggle-chrome">bars</button></div><div class="hud"><div class="rail"><div class="fill"></div></div><div class="meta">— / —</div></div>`;
+  root.innerHTML = `<style>${shadowCss()}</style><button class="close">exit</button><div class="stage"></div><div class="controls"><button class="pill font-down">A−</button><input class="range font-range" type="range" min="18" max="64" step="1"><button class="pill font-up">A+</button><button class="pill toggle-chrome">bars</button></div><div class="hud"><div class="rail"><div class="fill"></div></div><div class="meta">— / —</div></div>`;
   stage = root.querySelector('.stage');
-  layers = [...root.querySelectorAll('.layer')];
+  layers = [];
   fill = root.querySelector('.fill');
   meta = root.querySelector('.meta');
   root.querySelector('.close').addEventListener('click', closeImmersive);
@@ -238,6 +242,19 @@ function applyOverlaySettings() {
   root?.querySelector('.font-range') && (root.querySelector('.font-range').value = Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize);
   root?.querySelector('.toggle-chrome')?.classList.toggle('active', !!settings.hideStChrome);
   document.body.classList.toggle('im-hide-st-chrome', !!settings.hideStChrome && host.classList.contains('open'));
+}
+
+function ensureLayerCount(count) {
+  while (layers.length < count) {
+    const layer = document.createElement('div');
+    layer.className = 'layer';
+    stage.appendChild(layer);
+    layers.push(layer);
+  }
+  while (layers.length > count) {
+    const layer = layers.pop();
+    layer?.remove();
+  }
 }
 
 function renderLayer(layer, beatIndex, d) {
@@ -270,7 +287,14 @@ function renderLayer(layer, beatIndex, d) {
 function paint() {
   if (!host?.classList.contains('open') || !beats.length) return;
   const center = Math.round(visual);
-  const roles = [-1, 0, 1];
+  const settings = getSettings();
+  let ahead = Math.max(0, Number(settings.previewAhead) || 0);
+  let behind = Math.max(0, Number(settings.previewBehind) || 0);
+  if (settings.position === 'bottom') ahead = Math.min(ahead, 1);
+  if (settings.position === 'top') behind = Math.min(behind, 1);
+  const roles = [];
+  for (let r = -behind; r <= ahead; r++) roles.push(r);
+  ensureLayerCount(roles.length);
   roles.forEach((role, i) => renderLayer(layers[i], center + role, (center + role) - visual));
   const progress = beats.length > 0 ? visual / beats.length : 0;
   fill.style.width = `${clamp(progress, 0, 1) * 100}%`;
@@ -365,24 +389,29 @@ function attachMotionHandlers() {
     event.preventDefault();
     const settings = getSettings();
     const direction = event.deltaY > 0 ? 1 : -1;
-    if (settings.scrollMode === 'step') { startSettle(targetIndex + direction); return; }
-    // If the user wheels again during a transition, chain from the pending target immediately.
-    if (transitionRaf && Math.abs(event.deltaY) > 18) { startSettle(targetIndex + direction); return; }
+    if (settings.scrollBehavior === 'swipe' || settings.scrollMode === 'step') {
+      startSettle(targetIndex + direction);
+      return;
+    }
     inputStarted();
-    offset = clamp(offset + event.deltaY * getWeight().wheel, -0.95, 0.95);
-    visual = index + offset;
+    visual = clamp(visual + event.deltaY * getWeight().wheel, 0, beats.length);
+    index = Math.floor(clamp(visual, 0, Math.max(0, beats.length - 1)));
+    targetIndex = Math.round(clamp(visual, 0, beats.length));
+    offset = visual - index;
     paint();
     clearTimeout(stage._imWheelTimer);
-    if (Math.abs(offset) >= (Number(settings.threshold) || getWeight().threshold)) {
-      const dir = offset > 0 ? 1 : -1;
-      offset = 0;
-      startSettle(targetIndex + dir);
-    } else {
-      stage._imWheelTimer = setTimeout(thresholdResolve, 120);
-    }
+    stage._imWheelTimer = setTimeout(thresholdResolve, 120);
   }, { passive: false });
-  stage.addEventListener('pointerdown', event => { dragging = true; inputStarted(); dragStartX = event.clientX; dragStartY = event.clientY; dragStartOffset = offset; stage.classList.add('drag'); stage.setPointerCapture(event.pointerId); });
-  stage.addEventListener('pointermove', event => { if (!dragging) return; const stepSize = Math.max(Number(getSettings().spread) || DEFAULT_SETTINGS.spread, (Number(getSettings().fontSize) || DEFAULT_SETTINGS.fontSize) * 4.1); offset = clamp(dragStartOffset - (event.clientY - dragStartY) / stepSize, -0.95, 0.95); visual = index + offset; paint(); });
+  stage.addEventListener('pointerdown', event => { dragging = true; inputStarted(); dragStartX = event.clientX; dragStartY = event.clientY; dragStartVisual = visual; dragStartOffset = offset; stage.classList.add('drag'); stage.setPointerCapture(event.pointerId); });
+  stage.addEventListener('pointermove', event => {
+    if (!dragging) return;
+    const stepSize = Math.max(Number(getSettings().spread) || DEFAULT_SETTINGS.spread, (Number(getSettings().fontSize) || DEFAULT_SETTINGS.fontSize) * 4.1);
+    visual = clamp(dragStartVisual - (event.clientY - dragStartY) / stepSize, 0, beats.length);
+    index = Math.floor(clamp(visual, 0, Math.max(0, beats.length - 1)));
+    targetIndex = Math.round(clamp(visual, 0, beats.length));
+    offset = visual - index;
+    paint();
+  });
   stage.addEventListener('pointerup', event => { dragging = false; stage.classList.remove('drag'); const dx = event.clientX - dragStartX; const dy = event.clientY - dragStartY; if (getSettings().mobileSwipeNavigation && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.25) { offset = 0; startSettle(targetIndex + (dx < 0 ? 1 : -1)); return; } thresholdResolve(); });
   document.addEventListener('keydown', event => { if (!host?.classList.contains('open')) return; if (['ArrowDown', 'ArrowRight', 'Space'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(targetIndex + 1); } if (['ArrowUp', 'ArrowLeft'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(targetIndex - 1); } if (event.code === 'Escape') { event.preventDefault(); event.stopPropagation(); closeImmersive(); } }, true);
 }
