@@ -20,11 +20,13 @@ const DEFAULT_SETTINGS = {
   displayMode: 'rotary',
   position: 'center',
   weight: 'heavy',
-  material: 'pearl',
+  material: 'etched',
   threshold: 0.32,
   fontSize: 38,
   spread: 220,
   fadeOnEnd: true,
+  exitAtEnd: true,
+  exitAtStart: true,
   showInModeControls: true,
   hideStChrome: false,
   contextPreview: true,
@@ -54,6 +56,8 @@ let host;
 let root;
 let stage;
 let layers = [];
+let beatHeights = [];
+let beatCenters = [];
 let fill;
 let meta;
 let fontRange;
@@ -74,6 +78,9 @@ let dragRaf = null;
 let glideRaf = null;
 let glideVelocity = 0;
 let lastGlideTs = 0;
+let pointerVel = 0;
+let lastMoveY = 0;
+let lastMoveTs = 0;
 let targetIndex = 0;
 let dragStartTargetIndex = 0;
 let streamingMessageId = null;
@@ -86,11 +93,14 @@ function getSettings() {
     if (settings[key] === undefined) settings[key] = structuredClone(value);
   }
   settings.version = VERSION;
-  if ((settings.displayDefaultsVersion || 0) < 3) {
+  if ((settings.displayDefaultsVersion || 0) < 4) {
     settings.displayMode = 'rotary';
     settings.contextPreview = true;
     if ((Number(settings.threshold) || 0) > 0.38) settings.threshold = 0.32;
-    settings.displayDefaultsVersion = 3;
+    settings.material = 'etched';
+    settings.exitAtEnd = true;
+    settings.exitAtStart = true;
+    settings.displayDefaultsVersion = 4;
   }
   return settings;
 }
@@ -224,15 +234,21 @@ function createOverlay() {
   fill = root.querySelector('.fill');
   meta = root.querySelector('.meta');
   root.querySelector('.close').addEventListener('click', closeImmersive);
-  root.querySelector('.font-range').addEventListener('input', event => { const settings = getSettings(); settings.fontSize = Number(event.target.value) || DEFAULT_SETTINGS.fontSize; saveSettings(); applyOverlaySettings(); paint(); });
+  root.querySelector('.font-range').addEventListener('input', event => { const settings = getSettings(); settings.fontSize = Number(event.target.value) || DEFAULT_SETTINGS.fontSize; saveSettings(); applyOverlaySettings(); remeasureAndPaint(); });
   root.querySelector('.font-down').addEventListener('click', () => adjustFontSize(-2));
   root.querySelector('.font-up').addEventListener('click', () => adjustFontSize(2));
-  root.querySelector('.toggle-chrome').addEventListener('click', () => { const settings = getSettings(); settings.hideStChrome = !settings.hideStChrome; saveSettings(); applyOverlaySettings(); });
+  root.querySelector('.toggle-chrome').addEventListener('click', () => { const settings = getSettings(); settings.hideStChrome = !settings.hideStChrome; saveSettings(); applyOverlaySettings(); remeasureAndPaint(); });
   attachMotionHandlers();
 }
 
+function remeasureAndPaint() {
+  if (!host?.classList.contains('open')) return;
+  measureBeats();
+  paint();
+}
+
 function resetMotion() { index = 0; targetIndex = 0; visual = 0; targetVisual = 0; offset = 0; dragging = false; }
-function adjustFontSize(delta) { const settings = getSettings(); settings.fontSize = clamp((Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize) + delta, 18, 64); saveSettings(); applyOverlaySettings(); paint(); }
+function adjustFontSize(delta) { const settings = getSettings(); settings.fontSize = clamp((Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize) + delta, 18, 64); saveSettings(); applyOverlaySettings(); remeasureAndPaint(); }
 
 function applyOverlaySettings() {
   if (!host) return;
@@ -263,6 +279,55 @@ function ensureLayerCount(count) {
   }
 }
 
+function measureBeats() {
+  beatHeights = [];
+  beatCenters = [];
+  if (!stage || !beats.length) return;
+  const settings = getSettings();
+  const measurer = document.createElement('div');
+  measurer.className = 'layer im-measure';
+  measurer.style.position = 'absolute';
+  measurer.style.visibility = 'hidden';
+  measurer.style.opacity = '0';
+  measurer.style.transform = 'none';
+  measurer.style.left = '50%';
+  stage.appendChild(measurer);
+  for (let i = 0; i < beats.length; i++) {
+    const beat = beats[i];
+    const who = beat.who ? `<span class="who">${escapeHtml(beat.who)}</span>` : '';
+    measurer.innerHTML = `${who}<span class="txt">${beat.html}</span>`;
+    beatHeights[i] = measurer.offsetHeight || (Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize) * 1.55;
+  }
+  measurer.remove();
+  // gap is the even breathing room between any two adjacent beats, independent of beat size
+  const gap = Math.max(28, (Number(settings.spread) || DEFAULT_SETTINGS.spread) - (Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize) * 2.2);
+  let cursor = 0;
+  for (let i = 0; i < beats.length; i++) {
+    const half = beatHeights[i] / 2;
+    cursor += half;
+    beatCenters[i] = cursor;
+    cursor += half + gap;
+  }
+}
+
+// Pixel offset of a fractional beat position from the current center beat, using measured heights.
+function centerPixelFor(pos) {
+  if (!beatCenters.length) return pos * (Number(getSettings().spread) || DEFAULT_SETTINGS.spread);
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  const frac = pos - lo;
+  const at = i => {
+    if (i < 0) return (beatCenters[0] ?? 0) - (-i) * ((Number(getSettings().spread) || DEFAULT_SETTINGS.spread));
+    if (i >= beatCenters.length) {
+      const last = beatCenters[beatCenters.length - 1] ?? 0;
+      return last + (i - (beatCenters.length - 1)) * ((Number(getSettings().spread) || DEFAULT_SETTINGS.spread));
+    }
+    return beatCenters[i];
+  };
+  if (lo === hi) return at(lo);
+  return at(lo) + (at(hi) - at(lo)) * frac;
+}
+
 function renderLayer(layer, beatIndex, d) {
   if (beatIndex < 0 || beatIndex >= beats.length) { layer.style.visibility = 'hidden'; layer.style.opacity = '0'; layer.innerHTML = ''; return; }
   const beat = beats[beatIndex];
@@ -280,8 +345,7 @@ function renderLayer(layer, beatIndex, d) {
     const ghostTail = baseGhost * Math.exp(-dn / 1.35);
     opacity = Math.min(1, activeCurve + ghostTail);
   } else opacity = Math.exp(-Math.pow(dn / 0.40, 2));
-  const baseGap = Number(settings.spread) || DEFAULT_SETTINGS.spread;
-  const y = d * baseGap;
+  const y = centerPixelFor(beatIndex) - centerPixelFor(visual);
   const scale = displayMode === 'teleprompter' ? 0.82 + 0.18 * Math.min(1, opacity * 3) : 0.9 + 0.1 * Math.min(1, opacity * 4);
   const rot = displayMode === 'rotary' ? ` rotateX(${clamp(d, -2, 2) * -34}deg)` : '';
   layer.style.transform = `translate3d(-50%, calc(-50% + ${y.toFixed(2)}px), 0)${rot} scale(${scale.toFixed(3)})`;
@@ -319,6 +383,7 @@ function openMessage(messageId) {
   host.classList.add('open');
   document.body.classList.add('immersive-mode-active');
   applyOverlaySettings();
+  measureBeats();
   paint();
 }
 
@@ -346,6 +411,7 @@ function updateStreamingMessage() {
   host.classList.add('open');
   document.body.classList.add('immersive-mode-active');
   applyOverlaySettings();
+  measureBeats();
   paint();
 }
 
@@ -354,9 +420,23 @@ function fadeCloseImmersive() { if (!host?.classList.contains('open') || host.cl
 function closeImmersive() { fadeCloseImmersive(); }
 
 function startSettle(toIndex) {
+  const settings = getSettings();
+  const atEnd = toIndex >= beats.length;
+  const atStart = toIndex < 0;
+  // Past the last beat
+  if (atEnd) {
+    if (settings.exitAtEnd) { fadeCloseImmersive(); return; }
+    // exitAtEnd off: allow an empty END state, exit only on a second push past it
+    if (index >= beats.length) { fadeCloseImmersive(); return; }
+    toIndex = beats.length; // empty END sentinel
+  }
+  // Before the first beat
+  if (atStart) {
+    if (settings.exitAtStart) { fadeCloseImmersive(); return; }
+    toIndex = 0;
+  }
   toIndex = clamp(toIndex, 0, beats.length);
   targetIndex = toIndex;
-  if (toIndex >= beats.length && index >= beats.length && getSettings().fadeOnEnd) { fadeCloseImmersive(); return; }
   if (transitionRaf) cancelAnimationFrame(transitionRaf);
   if (dragRaf) { cancelAnimationFrame(dragRaf); dragRaf = null; }
   if (glideRaf) { cancelAnimationFrame(glideRaf); glideRaf = null; glideVelocity = 0; }
@@ -417,7 +497,12 @@ function startGlide(delta) {
   const step = now => {
     const dt = Math.min(2.2, Math.max(0.5, (now - lastGlideTs) / 16.67));
     lastGlideTs = now;
-    visual = clamp(visual + glideVelocity * dt, 0, beats.length);
+    const settings = getSettings();
+    const next = visual + glideVelocity * dt;
+    // Overscroll past the end/start while gliding -> exit if enabled
+    if (next > beats.length - 0.001 && glideVelocity > 0 && settings.exitAtEnd) { glideVelocity = 0; glideRaf = null; fadeCloseImmersive(); return; }
+    if (next < 0.001 && glideVelocity < 0 && settings.exitAtStart) { glideVelocity = 0; glideRaf = null; fadeCloseImmersive(); return; }
+    visual = clamp(next, 0, beats.length);
     if (visual <= 0 || visual >= beats.length) glideVelocity = 0;
     glideVelocity *= Math.pow(0.925, dt);
     targetVisual = visual;
@@ -428,6 +513,30 @@ function startGlide(delta) {
       glideRaf = null;
       return;
     }
+    glideRaf = requestAnimationFrame(step);
+  };
+  glideRaf = requestAnimationFrame(step);
+}
+
+function flingWith(velocity) {
+  if (dragRaf) { cancelAnimationFrame(dragRaf); dragRaf = null; }
+  glideVelocity = velocity;
+  lastGlideTs = performance.now();
+  if (glideRaf) return;
+  const step = now => {
+    const dt = Math.min(2.2, Math.max(0.5, (now - lastGlideTs) / 16.67));
+    lastGlideTs = now;
+    const settings = getSettings();
+    const next = visual + glideVelocity * dt;
+    if (next > beats.length - 0.001 && glideVelocity > 0 && settings.exitAtEnd) { glideVelocity = 0; glideRaf = null; fadeCloseImmersive(); return; }
+    if (next < 0.001 && glideVelocity < 0 && settings.exitAtStart) { glideVelocity = 0; glideRaf = null; fadeCloseImmersive(); return; }
+    visual = clamp(next, 0, beats.length);
+    if (visual <= 0 || visual >= beats.length) glideVelocity = 0;
+    glideVelocity *= Math.pow(0.94, dt);
+    targetVisual = visual;
+    updateFromVisualPosition();
+    paint();
+    if (Math.abs(glideVelocity) < 0.0009) { glideVelocity = 0; glideRaf = null; return; }
     glideRaf = requestAnimationFrame(step);
   };
   glideRaf = requestAnimationFrame(step);
@@ -455,7 +564,7 @@ function attachMotionHandlers() {
     if (settings.scrollFeel === 'glide') startGlide(delta);
     else smoothDragTo(targetVisual + delta);
   }, { passive: false });
-  stage.addEventListener('pointerdown', event => { dragging = true; inputStarted(); if (dragRaf) { cancelAnimationFrame(dragRaf); dragRaf = null; } if (glideRaf) { cancelAnimationFrame(glideRaf); glideRaf = null; glideVelocity = 0; } dragStartX = event.clientX; dragStartY = event.clientY; dragStartVisual = visual; dragStartOffset = offset; stage.classList.add('drag'); stage.setPointerCapture(event.pointerId); });
+  stage.addEventListener('pointerdown', event => { dragging = true; inputStarted(); if (dragRaf) { cancelAnimationFrame(dragRaf); dragRaf = null; } if (glideRaf) { cancelAnimationFrame(glideRaf); glideRaf = null; glideVelocity = 0; } dragStartX = event.clientX; dragStartY = event.clientY; dragStartVisual = visual; dragStartOffset = offset; pointerVel = 0; lastMoveY = event.clientY; lastMoveTs = performance.now(); stage.classList.add('drag'); stage.setPointerCapture(event.pointerId); });
   stage.addEventListener('pointermove', event => {
     if (!dragging) return;
     const stepSize = Number(getSettings().spread) || DEFAULT_SETTINGS.spread;
@@ -463,9 +572,40 @@ function attachMotionHandlers() {
     targetVisual = visual;
     updateFromVisualPosition();
     paint();
+    const now = performance.now();
+    const dtMs = now - lastMoveTs;
+    if (dtMs > 0) {
+      // beats moved per frame from the pixel delta since last move
+      const beatsPerPx = 1 / stepSize;
+      const instVel = -((event.clientY - lastMoveY) * beatsPerPx) * (16.67 / dtMs);
+      pointerVel = pointerVel * 0.5 + instVel * 0.5;
+      lastMoveY = event.clientY;
+      lastMoveTs = now;
+    }
   });
-  stage.addEventListener('pointerup', event => { dragging = false; stage.classList.remove('drag'); const dx = event.clientX - dragStartX; const dy = event.clientY - dragStartY; if (getSettings().mobileSwipeNavigation && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.25) { offset = 0; startSettle(targetIndex + (dx < 0 ? 1 : -1)); return; } if (getSettings().scrollBehavior !== 'drag') thresholdResolve(); });
+  stage.addEventListener('pointerup', event => {
+    if (!dragging) return;
+    dragging = false;
+    stage.classList.remove('drag');
+    const settings = getSettings();
+    const dx = event.clientX - dragStartX;
+    const dy = event.clientY - dragStartY;
+    // Horizontal swipe = discrete prev/next (mobile)
+    if (settings.mobileSwipeNavigation && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.25) {
+      offset = 0;
+      startSettle(targetIndex + (dx < 0 ? 1 : -1));
+      return;
+    }
+    // Vertical release: fling with momentum (native-feeling), regardless of touch or mouse
+    if (settings.scrollBehavior === 'drag' && Math.abs(pointerVel) > 0.012) {
+      flingWith(clamp(pointerVel, -0.9, 0.9));
+      return;
+    }
+    if (settings.scrollBehavior !== 'drag') thresholdResolve();
+  });
   document.addEventListener('keydown', event => { if (!host?.classList.contains('open')) return; if (['ArrowDown', 'ArrowRight', 'Space'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(targetIndex + 1); } if (['ArrowUp', 'ArrowLeft'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(targetIndex - 1); } if (event.code === 'Escape') { event.preventDefault(); event.stopPropagation(); closeImmersive(); } }, true);
+  let resizeTimer = null;
+  window.addEventListener('resize', () => { if (!host?.classList.contains('open')) return; clearTimeout(resizeTimer); resizeTimer = setTimeout(remeasureAndPaint, 90); });
 }
 
 function addMessageButton() { if ($('#message_template .mes_immersive_mode_button').length) return; const button = $('<div title="Open immersive reader" class="mes_button mes_immersive_mode_button fa-solid fa-book-open interactable" tabindex="0"></div>'); $('#message_template .mes_buttons .extraMesButtons').prepend(button); updateMessageButtonVisibility(); }
@@ -485,6 +625,8 @@ async function addSettingsUi() {
   container.find('.im_show_message_ids').prop('checked', settings.showMessageIds).on('change', function () { settings.showMessageIds = !!$(this).prop('checked'); saveSettings(); paint(); });
   container.find('.im_show_button').prop('checked', settings.showButton).on('change', function () { settings.showButton = !!$(this).prop('checked'); saveSettings(); updateMessageButtonVisibility(); });
   container.find('.im_fade_on_end').prop('checked', settings.fadeOnEnd).on('change', function () { settings.fadeOnEnd = !!$(this).prop('checked'); saveSettings(); });
+  container.find('.im_exit_at_end').prop('checked', settings.exitAtEnd).on('change', function () { settings.exitAtEnd = !!$(this).prop('checked'); saveSettings(); });
+  container.find('.im_exit_at_start').prop('checked', settings.exitAtStart).on('change', function () { settings.exitAtStart = !!$(this).prop('checked'); saveSettings(); });
   container.find('.im_show_inmode_controls').prop('checked', settings.showInModeControls).on('change', function () { settings.showInModeControls = !!$(this).prop('checked'); saveSettings(); applyOverlaySettings(); });
   container.find('.im_hide_st_chrome').prop('checked', settings.hideStChrome).on('change', function () { settings.hideStChrome = !!$(this).prop('checked'); saveSettings(); applyOverlaySettings(); });
   container.find('.im_context_preview').prop('checked', settings.contextPreview).on('change', function () { settings.contextPreview = !!$(this).prop('checked'); saveSettings(); paint(); });
@@ -502,8 +644,8 @@ async function addSettingsUi() {
   container.find('.im_weight').val(settings.weight).on('change', function () { settings.weight = String($(this).val() || 'heavy'); saveSettings(); });
   container.find('.im_material').val(settings.material).on('change', function () { settings.material = String($(this).val() || 'pearl'); saveSettings(); applyOverlaySettings(); });
   container.find('.im_threshold').val(settings.threshold).on('input change', function () { settings.threshold = Number($(this).val()) || DEFAULT_SETTINGS.threshold; saveSettings(); });
-  container.find('.im_font_size').val(settings.fontSize).on('input change', function () { settings.fontSize = Number($(this).val()) || DEFAULT_SETTINGS.fontSize; saveSettings(); applyOverlaySettings(); paint(); });
-  container.find('.im_spread').val(settings.spread).on('input change', function () { settings.spread = Number($(this).val()) || DEFAULT_SETTINGS.spread; saveSettings(); paint(); });
+  container.find('.im_font_size').val(settings.fontSize).on('input change', function () { settings.fontSize = Number($(this).val()) || DEFAULT_SETTINGS.fontSize; saveSettings(); applyOverlaySettings(); remeasureAndPaint(); });
+  container.find('.im_spread').val(settings.spread).on('input change', function () { settings.spread = Number($(this).val()) || DEFAULT_SETTINGS.spread; saveSettings(); remeasureAndPaint(); });
   const updatePreviewValues = () => {
     const current = getSettings();
     container.find('.im_preview_both_value').text(String(Math.max(Number(current.previewAhead) || 0, Number(current.previewBehind) || 0)));
@@ -541,7 +683,7 @@ async function addSettingsUi() {
 
 function registerEvents() { eventSource.makeLast(event_types.CHARACTER_MESSAGE_RENDERED, (messageId, type) => { const message = chat[messageId]; if (!message || message.is_user || message.is_system) return; if (getSettings().autoOpen && ['normal', 'continue', 'swipe'].includes(type || 'normal')) openMessage(Number(messageId)); }); eventSource.on(event_types.STREAM_TOKEN_RECEIVED, updateStreamingMessage); eventSource.on(event_types.CHAT_CHANGED, closeImmersive); }
 function registerSlashCommand() { SlashCommandParser.addCommandObject(SlashCommand.fromProps({ name: 'immersive', callback: () => { openLatestAssistant(); return ''; }, helpString: 'Open Immersive Mode for the latest assistant message.' })); }
-function exposePublicApi() { globalThis.SillyTavernImmersiveMode = { openLatest: openLatestAssistant, openMessage, close: closeImmersive, debugOpenHtml(html, name = 'Seraphine') { createOverlay(); activeMessageId = -1; beats = buildBeatsFromMessage({ mes: String(html || ''), name, is_user: false, is_system: false }, 'debug'); resetMotion(); host.classList.remove('closing'); host.style.opacity = ''; host.style.transition = ''; host.classList.add('open'); document.body.classList.add('immersive-mode-active'); applyOverlaySettings(); paint(); }, getState() { return { activeMessageId, beats: beats.map(b => stripTags(b.html)), index, targetIndex, visual, targetVisual, open: host?.classList.contains('open') || false, renderedLayers: layers.length }; }, debugSegmentHtml(html) { return buildBeatsFromMessage({ mes: String(html || ''), name: 'debug', is_user: false, is_system: false }, 'debug').map(b => stripTags(b.html)); }, debugSetSettings(next) { Object.assign(getSettings(), next || {}); saveSettings(); if (host) applyOverlaySettings(); } }; }
+function exposePublicApi() { globalThis.SillyTavernImmersiveMode = { openLatest: openLatestAssistant, openMessage, close: closeImmersive, debugOpenHtml(html, name = 'Seraphine') { createOverlay(); activeMessageId = -1; beats = buildBeatsFromMessage({ mes: String(html || ''), name, is_user: false, is_system: false }, 'debug'); resetMotion(); host.classList.remove('closing'); host.style.opacity = ''; host.style.transition = ''; host.classList.add('open'); document.body.classList.add('immersive-mode-active'); applyOverlaySettings(); measureBeats(); paint(); }, getState() { return { activeMessageId, beats: beats.map(b => stripTags(b.html)), index, targetIndex, visual, targetVisual, open: host?.classList.contains('open') || false, renderedLayers: layers.length }; }, debugSegmentHtml(html) { return buildBeatsFromMessage({ mes: String(html || ''), name: 'debug', is_user: false, is_system: false }, 'debug').map(b => stripTags(b.html)); }, debugSetSettings(next) { Object.assign(getSettings(), next || {}); saveSettings(); if (host) applyOverlaySettings(); } }; }
 
 async function init() { if (initialized) return; initialized = true; getSettings(); await addSettingsUi(); createOverlay(); addMessageButton(); addSendButton(); attachDelegatedHandlers(); registerEvents(); registerSlashCommand(); exposePublicApi(); console.log('[Immersive Mode] Loaded layered reader engine.'); }
 init().catch(error => { console.error('[Immersive Mode] Init failed:', error); toastr?.error?.(`Init failed: ${error?.message || error}`, 'Immersive Mode'); });
