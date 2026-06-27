@@ -25,6 +25,15 @@
       </div>
 
       <div style="margin-top:10px">
+        <label>Content Mode</label>
+      </div>
+      <select class="text_pole im_content_mode">
+        <option value="rp">RP mode (segregate quotes &amp; emphasis)</option>
+        <option value="general">General mode (plain text)</option>
+      </select>
+      <label class="checkbox_label" style="margin-top:6px"><input type="checkbox" class="im_codeblock_general" /> General: render code blocks as code cards <span style="opacity:.6">(experimental)</span></label>
+
+      <div style="margin-top:10px">
         <label>Extraction Mode</label>
       </div>
       <select class="text_pole im_extraction_mode">
@@ -124,6 +133,25 @@
         <label>Behind: <span class="im_preview_behind_value">0</span></label>
       </div>
       <input type="range" class="im_preview_behind" min="0" max="5" step="1" />
+
+      <div class="inline-drawer" style="margin-top:14px">
+        <div class="inline-drawer-toggle inline-drawer-header">
+          <b>Mobile / Performance</b>
+          <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+          <div style="margin-top:6px">
+            <label>Mobile Performance Mode</label>
+          </div>
+          <select class="text_pole im_mobile_performance">
+            <option value="auto">Auto (detect mobile/tablet)</option>
+            <option value="on">Always on</option>
+            <option value="off">Always off</option>
+          </select>
+          <small>Drops glow/blur/3D effects for smoother scrolling. Auto detects touch phones &amp; tablets (short side ≤ 1024px) and ignores portrait desktop monitors.</small>
+          <div style="margin-top:8px; opacity:.7" class="im_perf_status">Currently: —</div>
+        </div>
+      </div>
 
       <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap">
         <button class="menu_button im_open_now">Open latest assistant message</button>

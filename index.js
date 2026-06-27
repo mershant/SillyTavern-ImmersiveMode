@@ -17,6 +17,9 @@ const DEFAULT_SETTINGS = {
   scrollBehavior: 'drag',
   scrollFeel: 'glide',
   extractionMode: 'sentence',
+  contentMode: 'rp',
+  codeblockGeneral: true,
+  mobilePerformance: 'auto',
   displayMode: 'rotary',
   position: 'center',
   weight: 'heavy',
@@ -111,17 +114,20 @@ function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
 function stripTags(html) { const div = document.createElement('div'); div.innerHTML = String(html || ''); return div.textContent || ''; }
 function escapeHtml(value) { return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;'); }
 
-function normalizeMessageText(html) {
+function normalizeMessageText(html, generalMode) {
   const settings = getSettings();
   const div = document.createElement('div');
   div.innerHTML = String(html || '');
   div.querySelectorAll('script, style, .directional-roadway-panel, .mes_reasoning, .mes_reasoning_details').forEach(x => x.remove());
-  if (settings.preventCodeHtmlCapture) div.querySelectorAll('pre, code, kbd, samp').forEach(x => x.remove());
+  const stripCode = settings.preventCodeHtmlCapture && !(generalMode && settings.codeblockGeneral);
+  if (stripCode) div.querySelectorAll('pre, code, kbd, samp').forEach(x => x.remove());
   div.querySelectorAll('br').forEach(x => x.replaceWith('\n'));
-  div.querySelectorAll('strong, b').forEach(el => el.replaceWith(document.createTextNode(`==${el.textContent || ''}==`)));
-  div.querySelectorAll('em, i').forEach(el => el.replaceWith(document.createTextNode(`*${el.textContent || ''}*`)));
+  if (!generalMode) {
+    div.querySelectorAll('strong, b').forEach(el => el.replaceWith(document.createTextNode(`==${el.textContent || ''}==`)));
+    div.querySelectorAll('em, i').forEach(el => el.replaceWith(document.createTextNode(`*${el.textContent || ''}*`)));
+  }
   let text = (div.textContent || '').replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim();
-  if (settings.preventCodeHtmlCapture) {
+  if (stripCode) {
     text = text
       .replace(/```[\s\S]*?```/g, ' ')
       .replace(/`[^`]*`/g, ' ')
@@ -132,7 +138,7 @@ function normalizeMessageText(html) {
       .replace(/\n{3,}/g, '\n\n')
       .trim();
   }
-  if (settings.excludeBracketPipes) text = text.replace(/\[[^\]\n]*\|[^\]\n]*\]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  if (settings.excludeBracketPipes && !generalMode) text = text.replace(/\[[^\]\n]*\|[^\]\n]*\]/g, ' ').replace(/\s{2,}/g, ' ').trim();
   return text;
 }
 
@@ -194,13 +200,74 @@ function tokenizeIntoBeats(text) {
   return out.filter(Boolean);
 }
 
+function tokenizePlain(text) {
+  // General mode: no quote/asterisk atomic handling — just sentence/phrase split.
+  return splitLongPlain(String(text || '')).filter(Boolean);
+}
+
+function extractCodeBlocks(rawHtml) {
+  // Pull fenced code blocks and <pre><code> out of the message, returning ordered segments.
+  const segments = [];
+  let html = String(rawHtml || '');
+  // Decode <pre><code>…</code></pre> into fenced form first so one regex handles both.
+  const div = document.createElement('div');
+  div.innerHTML = html;
+  div.querySelectorAll('pre').forEach(pre => {
+    const codeEl = pre.querySelector('code');
+    const langClass = (codeEl?.className || pre.className || '').match(/language-([\w+-]+)/);
+    const lang = langClass ? langClass[1] : '';
+    const code = (codeEl?.textContent ?? pre.textContent ?? '').replace(/\s+$/, '');
+    pre.replaceWith(document.createTextNode(`\u0000CODE:${lang}\u0001${code}\u0000ENDCODE\u0000`));
+  });
+  let text = div.textContent || '';
+  // Fenced ```lang\n...```
+  text = text.replace(/```([\w+-]*)\n?([\s\S]*?)```/g, (m, lang, code) => `\u0000CODE:${lang || ''}\u0001${code.replace(/\s+$/, '')}\u0000ENDCODE\u0000`);
+  const parts = text.split(/\u0000ENDCODE\u0000/);
+  for (const part of parts) {
+    const codeMatch = part.match(/^([\s\S]*?)\u0000CODE:([\w+-]*)\u0001([\s\S]*)$/);
+    if (codeMatch) {
+      if (codeMatch[1].trim()) segments.push({ type: 'text', text: codeMatch[1] });
+      segments.push({ type: 'code', lang: codeMatch[2] || '', code: codeMatch[3] });
+    } else if (part.trim()) {
+      segments.push({ type: 'text', text: part });
+    }
+  }
+  return segments;
+}
+
 function getMessageName(message) { if (message?.name) return message.name; return message?.is_user ? 'You' : 'Assistant'; }
 
 function buildBeatsFromMessage(message, messageId) {
   const settings = getSettings();
-  const text = normalizeMessageText(message?.mes || '');
-  const raw = settings.splitBigBlocks ? tokenizeIntoBeats(text) : [text];
-  return raw.filter(x => String(x).trim()).map((textBeat, i) => ({ html: renderBeatHtml(textBeat), who: i === 0 ? getMessageName(message) : '', id: i === 0 ? `#${messageId}` : '' }));
+  const generalMode = (settings.contentMode || 'rp') === 'general';
+  const wantCodeBeats = generalMode && settings.codeblockGeneral;
+  let rawBeats = [];
+  if (wantCodeBeats) {
+    // Segment around code blocks; code becomes its own special beat, text is plain-split.
+    const segments = extractCodeBlocks(message?.mes || '');
+    for (const seg of segments) {
+      if (seg.type === 'code') {
+        if (seg.code.trim()) rawBeats.push({ code: true, lang: seg.lang, text: seg.code });
+      } else {
+        const cleaned = normalizeMessageText(seg.text, true);
+        for (const t of tokenizePlain(cleaned)) rawBeats.push({ code: false, text: t });
+      }
+    }
+  } else {
+    const text = normalizeMessageText(message?.mes || '', generalMode);
+    const raw = settings.splitBigBlocks ? (generalMode ? tokenizePlain(text) : tokenizeIntoBeats(text)) : [text];
+    rawBeats = raw.filter(x => String(x).trim()).map(t => ({ code: false, text: t }));
+  }
+  return rawBeats
+    .filter(b => b.code ? String(b.text).trim() : String(b.text).trim())
+    .map((b, i) => b.code
+      ? { html: renderCodeBeatHtml(b.text, b.lang), who: '', id: i === 0 ? `#${messageId}` : '', isCode: true }
+      : { html: renderBeatHtml(b.text), who: i === 0 ? getMessageName(message) : '', id: i === 0 ? `#${messageId}` : '', isCode: false });
+}
+
+function renderCodeBeatHtml(code, lang) {
+  const label = lang ? `<span class="code-lang">${escapeHtml(lang)}</span>` : '';
+  return `${label}${escapeHtml(code)}`;
 }
 
 function shadowCss() {
@@ -215,11 +282,17 @@ function shadowCss() {
     :host(.material-crystal) .txt{background:linear-gradient(176deg,#fff 0%,#f5f9ff 42%,#cfd9eb 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;filter:drop-shadow(0 0 2px rgba(255,255,255,.55)) drop-shadow(0 0 16px rgba(170,205,255,.38))}
     :host(.material-etched) .txt{color:rgba(246,243,235,.92);text-shadow:0 1px 0 rgba(255,255,255,.2),0 -1px 0 rgba(0,0,0,.6),0 0 14px rgba(210,225,255,.14)}
     :host(.material-liquid) .txt{background:linear-gradient(90deg,#eaf6ff 0%,#fff 42%,#d8e8ff 70%,#fff2c6 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;filter:drop-shadow(0 0 3px rgba(255,255,255,.65)) drop-shadow(0 0 22px rgba(130,190,255,.42))}
-    .close,.pill{border:1px solid rgba(255,255,255,.08);background:rgba(10,12,18,.45);color:#9aa3b2;border-radius:999px;padding:7px 12px;font-family:system-ui,sans-serif;font-size:12px;cursor:pointer;backdrop-filter:blur(12px);pointer-events:auto}.close{position:absolute;top:14px;right:16px;z-index:3}.close:hover,.pill:hover,.pill.active{color:#fff;border-color:rgba(255,255,255,.18)}
+    .close,.pill{border:1px solid rgba(255,255,255,.08);background:rgba(10,12,18,.45);color:#9aa3b2;border-radius:999px;padding:7px 12px;font-family:system-ui,sans-serif;font-size:12px;cursor:pointer;backdrop-filter:blur(12px);pointer-events:auto}.close:hover,.pill:hover,.pill.active{color:#fff;border-color:rgba(255,255,255,.18)}
+    .topbar{position:absolute;top:14px;right:16px;z-index:3;display:flex;align-items:center;gap:8px;pointer-events:auto}.toggle-chrome{font-size:15px;line-height:1;padding:6px 11px}
     .controls{position:absolute;left:50%;bottom:52px;transform:translateX(-50%);z-index:3;display:flex;align-items:center;gap:8px;font-family:system-ui,sans-serif;opacity:.72;transition:opacity 180ms ease;pointer-events:auto}.controls:hover{opacity:1}:host(:not(.show-controls)) .controls{display:none}.range{width:120px;accent-color:#ffcf6b;pointer-events:auto}
     .hud{position:absolute;left:0;right:0;bottom:20px;z-index:2;display:flex;flex-direction:column;align-items:center;gap:8px;font-family:system-ui,sans-serif;pointer-events:none}:host(:not(.show-progress)) .hud{display:none}.rail{width:min(320px,46vw);height:2px;background:rgba(255,255,255,.06);border-radius:9px;overflow:hidden}.fill{height:100%;width:0;background:linear-gradient(90deg,rgba(180,205,255,.7),#ffcf6b)}.meta{font-size:10.5px;color:#5d6573;letter-spacing:1px}
-    @media (max-width:900px),(pointer:coarse){:host,:host(.hide-chrome){inset:0;min-height:100dvh}.stage{min-height:100dvh}.layer{width:min(86vw,560px);font-size:clamp(21px,5.7vw,34px);line-height:1.62;letter-spacing:.02px}:host(.position-top) .layer{top:24%}:host(.position-center) .layer{top:47%}:host(.position-bottom) .layer{top:65%}.close{top:calc(env(safe-area-inset-top,0px) + 10px);right:10px;padding:8px 12px}.controls{bottom:calc(env(safe-area-inset-bottom,0px) + 72px);width:min(88vw,380px);justify-content:center;gap:8px;opacity:.78}.pill{padding:8px 12px;font-size:12px;min-width:42px}.range{width:min(34vw,140px)}.hud{bottom:calc(env(safe-area-inset-bottom,0px) + 30px)}.rail{width:min(58vw,260px)}}
-    @media (max-width:420px){.layer{width:84vw;font-size:clamp(20px,5.45vw,30px);line-height:1.6}.controls{transform:translateX(-50%) scale(.9);bottom:calc(env(safe-area-inset-bottom,0px) + 76px)}}
+    @media (max-width:900px),(pointer:coarse){:host,:host(.hide-chrome){inset:0;min-height:100dvh}.stage{min-height:100dvh}.layer{width:min(86vw,560px);font-size:var(--im-font-size,32px);line-height:1.62;letter-spacing:.02px}:host(.position-top) .layer{top:24%}:host(.position-center) .layer{top:47%}:host(.position-bottom) .layer{top:65%}.topbar{top:calc(env(safe-area-inset-top,0px) + 10px);right:10px}.close{padding:8px 12px}.controls{bottom:calc(env(safe-area-inset-bottom,0px) + 72px);width:auto;justify-content:center;gap:10px;opacity:.82}.pill{padding:9px 13px;font-size:13px;min-width:44px}.hud{bottom:calc(env(safe-area-inset-bottom,0px) + 30px)}.rail{width:min(58vw,260px)}}
+    @media (max-width:420px){.layer{width:84vw;font-size:var(--im-font-size,28px);line-height:1.6}.controls{transform:translateX(-50%) scale(.94);bottom:calc(env(safe-area-inset-bottom,0px) + 76px)}}
+    :host(.perf-mode) .layer{will-change:auto}
+    :host(.perf-mode) .txt{text-shadow:none!important;filter:none!important;background:none!important;-webkit-text-fill-color:#eef2f8!important;color:#eef2f8!important}
+    :host(.perf-mode) .stage{perspective:none}
+    .code-beat{width:min(900px,94vw);text-align:left;font-family:"JetBrains Mono","Fira Code",ui-monospace,Menlo,Consolas,monospace;font-size:clamp(12px,calc(var(--im-font-size,38px) * 0.5),22px);line-height:1.5;white-space:pre;overflow:auto;max-height:74vh;background:rgba(16,20,28,.82);border:1px solid rgba(140,170,220,.22);border-radius:14px;padding:18px 20px;color:#d7e2f2;box-shadow:0 18px 60px rgba(0,0,0,.5);-webkit-text-fill-color:#d7e2f2;text-shadow:none;background-clip:border-box}
+    .code-beat .code-lang{display:block;font-family:system-ui,sans-serif;font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#6f93c8;margin-bottom:10px}
   `;
 }
 
@@ -228,13 +301,12 @@ function createOverlay() {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = host.attachShadow({ mode: 'open' });
-  root.innerHTML = `<style>${shadowCss()}</style><button class="close">exit</button><div class="stage"></div><div class="controls"><button class="pill font-down">A−</button><input class="range font-range" type="range" min="18" max="64" step="1"><button class="pill font-up">A+</button><button class="pill toggle-chrome">bars</button></div><div class="hud"><div class="rail"><div class="fill"></div></div><div class="meta">— / —</div></div>`;
+  root.innerHTML = `<style>${shadowCss()}</style><div class="topbar"><button class="pill toggle-chrome" title="Hide/show SillyTavern bars" aria-label="Toggle bars">⤢</button><button class="close">exit</button></div><div class="stage"></div><div class="controls"><button class="pill font-down" title="Smaller text">A−</button><button class="pill font-up" title="Larger text">A+</button></div><div class="hud"><div class="rail"><div class="fill"></div></div><div class="meta">— / —</div></div>`;
   stage = root.querySelector('.stage');
   layers = [];
   fill = root.querySelector('.fill');
   meta = root.querySelector('.meta');
   root.querySelector('.close').addEventListener('click', closeImmersive);
-  root.querySelector('.font-range').addEventListener('input', event => { const settings = getSettings(); settings.fontSize = Number(event.target.value) || DEFAULT_SETTINGS.fontSize; saveSettings(); applyOverlaySettings(); remeasureAndPaint(); });
   root.querySelector('.font-down').addEventListener('click', () => adjustFontSize(-2));
   root.querySelector('.font-up').addEventListener('click', () => adjustFontSize(2));
   root.querySelector('.toggle-chrome').addEventListener('click', () => { const settings = getSettings(); settings.hideStChrome = !settings.hideStChrome; saveSettings(); applyOverlaySettings(); remeasureAndPaint(); });
@@ -250,6 +322,21 @@ function remeasureAndPaint() {
 function resetMotion() { index = 0; targetIndex = 0; visual = 0; targetVisual = 0; offset = 0; dragging = false; }
 function adjustFontSize(delta) { const settings = getSettings(); settings.fontSize = clamp((Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize) + delta, 18, 64); saveSettings(); applyOverlaySettings(); remeasureAndPaint(); }
 
+function isMobileViewport() {
+  // Coarse pointer = touch device (phones, tablets). Portrait desktop monitors use a fine pointer, so they are excluded.
+  const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+  const shortSide = Math.min(window.innerWidth || 0, window.innerHeight || 0);
+  // Tablets up to ~1024 short-side count; large touch desktops do not.
+  return !!coarse && shortSide <= 1024;
+}
+
+function isPerfActive() {
+  const mode = getSettings().mobilePerformance || 'auto';
+  if (mode === 'on') return true;
+  if (mode === 'off') return false;
+  return isMobileViewport();
+}
+
 function applyOverlaySettings() {
   if (!host) return;
   const settings = getSettings();
@@ -260,8 +347,8 @@ function applyOverlaySettings() {
   host.classList.add(`material-${settings.material || 'pearl'}`);
   host.classList.remove('position-top', 'position-center', 'position-bottom');
   host.classList.add(`position-${settings.position || 'center'}`);
+  host.classList.toggle('perf-mode', isPerfActive());
   host.style.setProperty('--im-font-size', `${Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize}px`);
-  root?.querySelector('.font-range') && (root.querySelector('.font-range').value = Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize);
   root?.querySelector('.toggle-chrome')?.classList.toggle('active', !!settings.hideStChrome);
   document.body.classList.toggle('im-hide-st-chrome', !!settings.hideStChrome && host.classList.contains('open'));
 }
@@ -294,8 +381,14 @@ function measureBeats() {
   stage.appendChild(measurer);
   for (let i = 0; i < beats.length; i++) {
     const beat = beats[i];
-    const who = beat.who ? `<span class="who">${escapeHtml(beat.who)}</span>` : '';
-    measurer.innerHTML = `${who}<span class="txt">${beat.html}</span>`;
+    if (beat.isCode) {
+      measurer.className = 'layer im-measure code-beat';
+      measurer.innerHTML = `${beat.html}`;
+    } else {
+      measurer.className = 'layer im-measure';
+      const who = beat.who ? `<span class="who">${escapeHtml(beat.who)}</span>` : '';
+      measurer.innerHTML = `${who}<span class="txt">${beat.html}</span>`;
+    }
     beatHeights[i] = measurer.offsetHeight || (Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize) * 1.55;
   }
   measurer.remove();
@@ -334,7 +427,13 @@ function renderLayer(layer, beatIndex, d) {
   const settings = getSettings();
   const who = beat.who ? `<span class="who">${escapeHtml(beat.who)}</span>` : '';
   const id = settings.showMessageIds && beat.id ? `<span class="who">${escapeHtml(beat.id)}</span>` : '';
-  layer.innerHTML = `${who}<span class="txt">${beat.html}</span>${id}`;
+  if (beat.isCode) {
+    layer.classList.add('code-beat');
+    layer.innerHTML = `${beat.html}${id}`;
+  } else {
+    layer.classList.remove('code-beat');
+    layer.innerHTML = `${who}<span class="txt">${beat.html}</span>${id}`;
+  }
   const displayMode = settings.displayMode || 'rotary';
   const contextPreview = !!settings.contextPreview || displayMode === 'teleprompter' || displayMode === 'rotary';
   const dn = Math.abs(d);
@@ -346,11 +445,12 @@ function renderLayer(layer, beatIndex, d) {
     opacity = Math.min(1, activeCurve + ghostTail);
   } else opacity = Math.exp(-Math.pow(dn / 0.40, 2));
   const y = centerPixelFor(beatIndex) - centerPixelFor(visual);
-  const scale = displayMode === 'teleprompter' ? 0.82 + 0.18 * Math.min(1, opacity * 3) : 0.9 + 0.1 * Math.min(1, opacity * 4);
-  const rot = displayMode === 'rotary' ? ` rotateX(${clamp(d, -2, 2) * -34}deg)` : '';
+  // Code beats stay flat (no rotary tilt / scale distortion) so the code stays readable.
+  const scale = beat.isCode ? (0.96 + 0.04 * Math.min(1, opacity * 4)) : (displayMode === 'teleprompter' ? 0.82 + 0.18 * Math.min(1, opacity * 3) : 0.9 + 0.1 * Math.min(1, opacity * 4));
+  const rot = (!beat.isCode && displayMode === 'rotary') ? ` rotateX(${clamp(d, -2, 2) * -34}deg)` : '';
   layer.style.transform = `translate3d(-50%, calc(-50% + ${y.toFixed(2)}px), 0)${rot} scale(${scale.toFixed(3)})`;
   layer.style.opacity = opacity.toFixed(3);
-  layer.style.filter = contextPreview && dn > 0.25 ? `blur(${Math.min(2.2, dn * 1.15).toFixed(2)}px)` : 'none';
+  layer.style.filter = (!beat.isCode && contextPreview && dn > 0.25) ? `blur(${Math.min(2.2, dn * 1.15).toFixed(2)}px)` : 'none';
   layer.style.visibility = opacity < 0.002 ? 'hidden' : 'visible';
 }
 
@@ -499,9 +599,9 @@ function startGlide(delta) {
     lastGlideTs = now;
     const settings = getSettings();
     const next = visual + glideVelocity * dt;
-    // Overscroll past the end/start while gliding -> exit if enabled
-    if (next > beats.length - 0.001 && glideVelocity > 0 && settings.exitAtEnd) { glideVelocity = 0; glideRaf = null; fadeCloseImmersive(); return; }
-    if (next < 0.001 && glideVelocity < 0 && settings.exitAtStart) { glideVelocity = 0; glideRaf = null; fadeCloseImmersive(); return; }
+    // Only exit on a deliberate, fast overscroll past the boundary — not a gentle arrival.
+    if (next > beats.length + 0.04 && glideVelocity > 0.02 && settings.exitAtEnd) { glideVelocity = 0; glideRaf = null; fadeCloseImmersive(); return; }
+    if (next < -0.04 && glideVelocity < -0.02 && settings.exitAtStart) { glideVelocity = 0; glideRaf = null; fadeCloseImmersive(); return; }
     visual = clamp(next, 0, beats.length);
     if (visual <= 0 || visual >= beats.length) glideVelocity = 0;
     glideVelocity *= Math.pow(0.925, dt);
@@ -528,8 +628,9 @@ function flingWith(velocity) {
     lastGlideTs = now;
     const settings = getSettings();
     const next = visual + glideVelocity * dt;
-    if (next > beats.length - 0.001 && glideVelocity > 0 && settings.exitAtEnd) { glideVelocity = 0; glideRaf = null; fadeCloseImmersive(); return; }
-    if (next < 0.001 && glideVelocity < 0 && settings.exitAtStart) { glideVelocity = 0; glideRaf = null; fadeCloseImmersive(); return; }
+    // Require a clear push past the edge with real momentum, so a fling that merely reaches the edge does not exit.
+    if (next > beats.length + 0.06 && glideVelocity > 0.05 && settings.exitAtEnd) { glideVelocity = 0; glideRaf = null; fadeCloseImmersive(); return; }
+    if (next < -0.06 && glideVelocity < -0.05 && settings.exitAtStart) { glideVelocity = 0; glideRaf = null; fadeCloseImmersive(); return; }
     visual = clamp(next, 0, beats.length);
     if (visual <= 0 || visual >= beats.length) glideVelocity = 0;
     glideVelocity *= Math.pow(0.94, dt);
@@ -605,7 +706,7 @@ function attachMotionHandlers() {
   });
   document.addEventListener('keydown', event => { if (!host?.classList.contains('open')) return; if (['ArrowDown', 'ArrowRight', 'Space'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(targetIndex + 1); } if (['ArrowUp', 'ArrowLeft'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(targetIndex - 1); } if (event.code === 'Escape') { event.preventDefault(); event.stopPropagation(); closeImmersive(); } }, true);
   let resizeTimer = null;
-  window.addEventListener('resize', () => { if (!host?.classList.contains('open')) return; clearTimeout(resizeTimer); resizeTimer = setTimeout(remeasureAndPaint, 90); });
+  window.addEventListener('resize', () => { if (!host?.classList.contains('open')) return; clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { applyOverlaySettings(); remeasureAndPaint(); }, 90); });
 }
 
 function addMessageButton() { if ($('#message_template .mes_immersive_mode_button').length) return; const button = $('<div title="Open immersive reader" class="mes_button mes_immersive_mode_button fa-solid fa-book-open interactable" tabindex="0"></div>'); $('#message_template .mes_buttons .extraMesButtons').prepend(button); updateMessageButtonVisibility(); }
@@ -635,7 +736,12 @@ async function addSettingsUi() {
   container.find('.im_mobile_swipe').prop('checked', settings.mobileSwipeNavigation).on('change', function () { settings.mobileSwipeNavigation = !!$(this).prop('checked'); saveSettings(); });
   container.find('.im_stream_capture').prop('checked', settings.streamCapture).on('change', function () { settings.streamCapture = !!$(this).prop('checked'); saveSettings(); });
   container.find('.im_show_send_button').prop('checked', settings.showSendButton).on('change', function () { settings.showSendButton = !!$(this).prop('checked'); saveSettings(); updateSendButtonVisibility(); });
-  container.find('.im_extraction_mode').val(settings.extractionMode).on('change', function () { settings.extractionMode = String($(this).val() || 'sentence'); saveSettings(); });
+  container.find('.im_extraction_mode').val(settings.extractionMode).on('change', function () { settings.extractionMode = String($(this).val() || 'sentence'); saveSettings(); if (host && activeMessageId !== null) remeasureAndPaint(); });
+  container.find('.im_content_mode').val(settings.contentMode).on('change', function () { settings.contentMode = String($(this).val() || 'rp'); saveSettings(); });
+  container.find('.im_codeblock_general').prop('checked', settings.codeblockGeneral).on('change', function () { settings.codeblockGeneral = !!$(this).prop('checked'); saveSettings(); });
+  const updatePerfStatus = () => container.find('.im_perf_status').text('Currently: ' + (isPerfActive() ? 'ON' : 'off') + (isMobileViewport() ? ' (mobile detected)' : ' (desktop)'));
+  container.find('.im_mobile_performance').val(settings.mobilePerformance).on('change', function () { settings.mobilePerformance = String($(this).val() || 'auto'); saveSettings(); applyOverlaySettings(); updatePerfStatus(); });
+  updatePerfStatus();
   container.find('.im_display_mode').val(settings.displayMode).on('change', function () { settings.displayMode = String($(this).val() || 'rotary'); saveSettings(); paint(); });
   container.find('.im_position').val(settings.position).on('change', function () { settings.position = String($(this).val() || 'center'); saveSettings(); });
   container.find('.im_scroll_mode').val(settings.scrollMode).on('change', function () { settings.scrollMode = String($(this).val() || 'threshold'); saveSettings(); });
