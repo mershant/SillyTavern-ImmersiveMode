@@ -40,7 +40,8 @@ const DEFAULT_SETTINGS = {
   previewBehind: 2,
   preventCodeHtmlCapture: true,
   useRenderedHtml: true,
-  skipDetailsBlocks: true,
+  skipDetailsBlocks: false,
+  shrinkOversizedBeats: true,
   excludeBracketPipes: true,
   mobileSwipeNavigation: true,
   showSendButton: true,
@@ -74,6 +75,8 @@ let stage;
 let layers = [];
 let beatHeights = [];
 let beatCenters = [];
+let beatScale = [];
+let beatOverflow = [];
 let fill;
 let meta;
 let speedHint;
@@ -141,20 +144,48 @@ function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
 function stripTags(html) { const div = document.createElement('div'); div.innerHTML = String(html || ''); return div.textContent || ''; }
 function escapeHtml(value) { return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;'); }
 
+// Inline styling tags we keep live (so <font color>, colored spans, mark/u/s render as-is in prose).
+const INLINE_KEEP_TAGS = new Set(['FONT', 'MARK', 'U', 'S', 'SMALL', 'SUB', 'SUP', 'SPAN']);
+let currentPreserved = [];
+let htmlBlockStore = [];
+function inlineOpenClose(el) {
+  const clone = el.cloneNode(false);
+  const tag = clone.outerHTML.replace(/><\/[^>]+>$/, '>');
+  return { open: tag, close: `</${el.tagName.toLowerCase()}>` };
+}
+function sanitizeInlineEl(el) {
+  // Keep only safe presentational attributes.
+  const allowed = ['color', 'style', 'class'];
+  for (const attr of [...el.attributes]) {
+    if (!allowed.includes(attr.name.toLowerCase())) el.removeAttribute(attr.name);
+  }
+  // Strip any event handlers / url() in style just in case.
+  const style = el.getAttribute('style');
+  if (style && /url\s*\(|expression\s*\(|javascript:/i.test(style)) el.removeAttribute('style');
+}
+
 function normalizeMessageText(html, generalMode) {
   const settings = getSettings();
   const div = document.createElement('div');
   div.innerHTML = String(html || '');
   div.querySelectorAll('script, style, .directional-roadway-panel, .mes_reasoning, .mes_reasoning_details').forEach(x => x.remove());
-  // Regex-rendered reference cards (e.g. [NPC]/[SECRET] turned into <details>) are meta UI, not prose.
   if (settings.skipDetailsBlocks) div.querySelectorAll('details').forEach(x => x.remove());
-  // When special blocks are enabled we've already pulled them out upstream, so don't strip here.
-  const stripCode = settings.preventCodeHtmlCapture && !settings.specialCode;
+  const stripCode = settings.preventCodeHtmlCapture && !settings.specialCode && !settings.specialHtml;
   if (stripCode) div.querySelectorAll('pre, code, kbd, samp').forEach(x => x.remove());
   div.querySelectorAll('br').forEach(x => x.replaceWith('\n'));
   if (!generalMode) {
     div.querySelectorAll('strong, b').forEach(el => el.replaceWith(document.createTextNode(`==${el.textContent || ''}==`)));
     div.querySelectorAll('em, i').forEach(el => el.replaceWith(document.createTextNode(`*${el.textContent || ''}*`)));
+  }
+  // Preserve inline styling tags as HTML tokens so colors survive the plain-text pipeline.
+  if (settings.specialHtml) {
+    div.querySelectorAll('font, mark, u, s, small, sub, sup, span[style], span[class]').forEach(el => {
+      if (!INLINE_KEEP_TAGS.has(el.tagName)) return;
+      sanitizeInlineEl(el);
+      const idx = currentPreserved.length;
+      currentPreserved.push(inlineOpenClose(el));
+      el.replaceWith(document.createTextNode(`@@IM_OPEN_${idx}@@${el.textContent || ''}@@IM_CLOSE_${idx}@@`));
+    });
   }
   let text = (div.textContent || '').replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim();
   if (stripCode) {
@@ -169,6 +200,7 @@ function normalizeMessageText(html, generalMode) {
       .trim();
   }
   if (settings.excludeBracketPipes && !generalMode) text = text.replace(/\[[^\]\n]*\|[^\]\n]*\]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  // Inline HTML markers survive segmentation and are restored in renderBeatHtml.
   return text;
 }
 
@@ -183,6 +215,10 @@ function renderBeatHtml(text) {
   safe = safe.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
   // Drop any stray unpaired asterisks so they don't render as literal *
   safe = safe.replace(/\*/g, '');
+  // Restore preserved inline HTML (color spans etc.) captured during normalization.
+  safe = safe
+    .replace(/@@IM_OPEN_(\d+)@@/g, (m, i) => currentPreserved[Number(i)]?.open || '')
+    .replace(/@@IM_CLOSE_(\d+)@@/g, (m, i) => currentPreserved[Number(i)]?.close || '');
   return safe;
 }
 
@@ -206,7 +242,8 @@ function splitLongPlain(text) {
       if (sentenceMode) out.push(sentence);
       else if (sentence.length <= maxSentence) out.push(sentence);
       else {
-        const clausePattern = punctuationMode ? /(?<=,|—|;|:)\s+/ : /(?<=—|;|:)\s+/;
+        // Split long non-sentence runs at clause punctuation, but NOT em-dashes (those read as one thought).
+        const clausePattern = punctuationMode ? /(?<=,|;|:)\s+/ : /(?<=;|:)\s+/;
         const clauses = sentence.split(clausePattern).map(x => x.trim()).filter(Boolean);
         out.push(...(clauses.length > 1 ? clauses : [sentence]));
       }
@@ -218,19 +255,35 @@ function splitLongPlain(text) {
 function tokenizeIntoBeats(text) {
   const out = [];
   const src = String(text || '');
+  // Match atomic quoted dialogue / emphasized text. Inline HTML markers are attached below.
   const atomRe = /("[^"\n]*(?:\n[^"\n]*)?"|“[^”]*”|\*[^*]+\*)/g;
   let last = 0;
   let match;
   while ((match = atomRe.exec(src))) {
-    const before = src.slice(last, match.index).trim();
+    let before = src.slice(last, match.index).trim();
+    let atom = match[0].trim();
+    let markerId = null;
+    const openMarker = before.match(/^@@IM_OPEN_(\d+)@@$/);
+    if (openMarker) {
+      markerId = openMarker[1];
+      atom = `${before}${atom}`;
+      before = '';
+    }
     if (before) out.push(...splitLongPlain(before));
-    const atom = match[0].trim();
+    let nextLast = match.index + match[0].length;
+    if (markerId !== null) {
+      const closeMarker = `@@IM_CLOSE_${markerId}@@`;
+      if (src.slice(nextLast).startsWith(closeMarker)) {
+        atom = `${atom}${closeMarker}`;
+        nextLast += closeMarker.length;
+      }
+    }
     if (atom.startsWith('*') && atom.endsWith('*')) {
       const inner = atom.slice(1, -1).trim();
       if (inner.length <= (Number(getSettings().emphasisAtomicMax) || DEFAULT_SETTINGS.emphasisAtomicMax)) out.push(atom);
       else out.push(...splitLongPlain(inner).map(piece => `*${piece}*`));
     } else out.push(atom);
-    last = match.index + match[0].length;
+    last = nextLast;
   }
   const after = src.slice(last).trim();
   if (after) out.push(...splitLongPlain(after));
@@ -249,7 +302,8 @@ function extractSpecialBlocks(rawHtml, opts) {
   const segments = [];
   const div = document.createElement('div');
   div.innerHTML = String(rawHtml || '');
-  if (getSettings().skipDetailsBlocks) div.querySelectorAll('details').forEach(x => x.remove());
+  // Only strip <details> when we are NOT rendering HTML blocks (otherwise we render them as cards).
+  if (getSettings().skipDetailsBlocks && !wantHtml) div.querySelectorAll('details').forEach(x => x.remove());
   if (wantCode) {
     div.querySelectorAll('pre').forEach(pre => {
       const codeEl = pre.querySelector('code');
@@ -260,29 +314,51 @@ function extractSpecialBlocks(rawHtml, opts) {
     });
   }
   if (wantHtml) {
-    // Block-level HTML rendered by ST: capture its source markup as a special block.
-    div.querySelectorAll('table, svg, figure').forEach(el => {
-      const src = el.outerHTML.replace(/\s+$/, '');
-      el.replaceWith(document.createTextNode(`\u0000BLK:html:\u0001${src}\u0000ENDBLK\u0000`));
+    // Block-level rendered HTML (regex-built cards, tables, etc.): keep the REAL markup so it renders live.
+    div.querySelectorAll('details, table, svg, figure, blockquote, hr').forEach(el => {
+      const id = htmlBlockStore.length;
+      htmlBlockStore.push(el.outerHTML);
+      el.replaceWith(document.createTextNode(`\u0000BLK:html:${id}\u0001\u0000ENDBLK\u0000`));
+    });
+    // Top-level block <div> that contains markup (e.g. a styled card not wrapped in <details>).
+    [...div.children].forEach(el => {
+      if (el.tagName === 'DIV' && /<(div|span|font|table|p|br|b|i|em|strong)/i.test(el.innerHTML)) {
+        const id = htmlBlockStore.length;
+        htmlBlockStore.push(el.outerHTML);
+        el.replaceWith(document.createTextNode(`\u0000BLK:html:${id}\u0001\u0000ENDBLK\u0000`));
+      }
     });
   }
-  let text = div.textContent || '';
+  // Use innerHTML here, not textContent, so inline rendered HTML (<font color>, spans, etc.)
+  // survives into normalizeMessageText() after block-level cards are extracted.
+  let text = div.innerHTML || '';
   if (wantCode) {
     text = text.replace(/```([\w+-]*)\n?([\s\S]*?)```/g, (m, lang, code) => {
-      const kind = (wantHtml && /^(html|xml|svg)$/i.test(lang)) ? 'html' : 'code';
+      const kind = (wantHtml && /^(html|xml|svg)$/i.test(lang)) ? 'html-src' : 'code';
       return `\u0000BLK:${kind}:${lang || ''}\u0001${code.replace(/\s+$/, '')}\u0000ENDBLK\u0000`;
     });
   }
   if (wantHtml) {
-    // Raw escaped HTML tag-soup blocks in plain text (e.g. &lt;div&gt;…&lt;/div&gt;)
-    text = text.replace(/(&lt;(div|table|ul|ol|section|article)\b[\s\S]*?&lt;\/\2&gt;)/gi, (m) => `\u0000BLK:html:\u0001${m}\u0000ENDBLK\u0000`);
+    // Raw escaped HTML tag-soup blocks left in plain text (e.g. &lt;div&gt;…&lt;/div&gt;) -> render live.
+    text = text.replace(/(&lt;(div|table|ul|ol|section|article|details)\b[\s\S]*?&lt;\/\2&gt;)/gi, (m) => {
+      const id = htmlBlockStore.length;
+      htmlBlockStore.push(unescapeMaybe(m));
+      return `\u0000BLK:html:${id}\u0001\u0000ENDBLK\u0000`;
+    });
   }
   const parts = text.split(/\u0000ENDBLK\u0000/);
   for (const part of parts) {
-    const blkMatch = part.match(/^([\s\S]*?)\u0000BLK:(code|html):([\w+-]*)\u0001([\s\S]*)$/);
+    const blkMatch = part.match(/^([\s\S]*?)\u0000BLK:(code|html|html-src):([\w+-]*)\u0001([\s\S]*)$/);
     if (blkMatch) {
       if (blkMatch[1].trim()) segments.push({ type: 'text', text: blkMatch[1] });
-      segments.push({ type: blkMatch[2], lang: blkMatch[3] || '', code: blkMatch[2] === 'html' ? unescapeMaybe(blkMatch[4]) : blkMatch[4] });
+      const kind = blkMatch[2];
+      if (kind === 'html') {
+        segments.push({ type: 'html', html: htmlBlockStore[Number(blkMatch[3])] || '' });
+      } else if (kind === 'html-src') {
+        segments.push({ type: 'html', html: blkMatch[4] }); // fenced html source -> render it
+      } else {
+        segments.push({ type: 'code', lang: blkMatch[3] || '', code: blkMatch[4] });
+      }
     } else if (part.trim()) {
       segments.push({ type: 'text', text: part });
     }
@@ -309,6 +385,8 @@ function getMessageSourceHtml(message, messageId) {
 
 function buildBeatsFromMessage(message, messageId) {
   const settings = getSettings();
+  currentPreserved = [];
+  htmlBlockStore = [];
   const sourceHtml = getMessageSourceHtml(message, messageId);
   const generalMode = (settings.contentMode || 'rp') === 'general';
   const wantSpecial = settings.specialCode || settings.specialHtml;
@@ -316,8 +394,10 @@ function buildBeatsFromMessage(message, messageId) {
   if (wantSpecial) {
     const segments = extractSpecialBlocks(sourceHtml, { code: settings.specialCode, html: settings.specialHtml });
     for (const seg of segments) {
-      if (seg.type === 'code' || seg.type === 'html') {
-        if (String(seg.code).trim()) rawBeats.push({ block: seg.type, lang: seg.lang, text: seg.code });
+      if (seg.type === 'code') {
+        if (String(seg.code).trim()) rawBeats.push({ block: 'code', lang: seg.lang, text: seg.code });
+      } else if (seg.type === 'html') {
+        if (stripTags(seg.html).trim() || /<(svg|img|hr|table)/i.test(seg.html)) rawBeats.push({ block: 'html', html: seg.html });
       } else {
         const cleaned = normalizeMessageText(seg.text, generalMode);
         const tokens = settings.splitBigBlocks ? (generalMode ? tokenizePlain(cleaned) : tokenizeIntoBeats(cleaned)) : [cleaned];
@@ -330,16 +410,29 @@ function buildBeatsFromMessage(message, messageId) {
     rawBeats = raw.filter(x => String(x).trim()).map(t => ({ block: '', text: t }));
   }
   return rawBeats
-    .filter(b => String(b.text).trim())
-    .map((b, i) => b.block
-      ? { html: renderCodeBeatHtml(b.text, b.lang, b.block), who: '', id: i === 0 ? `#${messageId}` : '', isCode: true }
-      : { html: renderBeatHtml(b.text), who: i === 0 ? getMessageName(message) : '', id: i === 0 ? `#${messageId}` : '', isCode: false });
+    .filter(b => b.block === 'html' ? true : String(b.text).trim())
+    .map((b, i) => {
+      if (b.block === 'html') return { html: renderHtmlBeat(b.html), who: '', id: i === 0 ? `#${messageId}` : '', isCode: true, isHtml: true };
+      if (b.block === 'code') return { html: renderCodeBeatHtml(b.text, b.lang, b.block), who: '', id: i === 0 ? `#${messageId}` : '', isCode: true };
+      return { html: renderBeatHtml(b.text), who: i === 0 ? getMessageName(message) : '', id: i === 0 ? `#${messageId}` : '', isCode: false };
+    });
 }
 
 function renderCodeBeatHtml(code, lang, kind) {
   const tag = kind === 'html' ? (lang || 'html') : (lang || 'code');
   const label = `<span class="code-lang">${escapeHtml(tag)}</span>`;
   return `${label}${escapeHtml(code)}`;
+}
+
+// Render a real rendered-HTML block (regex card etc.) live, auto-expanding <details>.
+function renderHtmlBeat(html) {
+  const wrap = document.createElement('div');
+  wrap.innerHTML = String(html || '');
+  // Auto-expand collapsible cards so the content is visible without clicking.
+  wrap.querySelectorAll('details').forEach(d => d.setAttribute('open', ''));
+  // Defang anything executable that might have slipped through.
+  wrap.querySelectorAll('script, iframe, object, embed').forEach(x => x.remove());
+  return wrap.innerHTML;
 }
 
 function shadowCss() {
@@ -367,6 +460,9 @@ function shadowCss() {
     :host(.perf-mode) .stage{perspective:none}
     .code-beat{width:min(900px,94vw);text-align:left;font-family:"JetBrains Mono","Fira Code",ui-monospace,Menlo,Consolas,monospace;font-size:clamp(12px,calc(var(--im-font-size,38px) * 0.5),22px);line-height:1.5;white-space:pre;overflow:auto;max-height:74vh;background:rgba(16,20,28,.82);border:1px solid rgba(140,170,220,.22);border-radius:14px;padding:18px 20px;color:#d7e2f2;box-shadow:0 18px 60px rgba(0,0,0,.5);-webkit-text-fill-color:#d7e2f2;text-shadow:none;background-clip:border-box}
     .code-beat .code-lang{display:block;font-family:system-ui,sans-serif;font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#6f93c8;margin-bottom:10px}
+    .html-card{width:min(900px,94vw);max-height:78vh;overflow:auto;text-align:left;background:rgba(16,20,28,.58);border:1px solid rgba(140,170,220,.18);border-radius:14px;padding:14px 16px;color:#edf1f7;-webkit-text-fill-color:initial;text-shadow:none;box-shadow:0 18px 60px rgba(0,0,0,.45);font-family:inherit;font-size:calc(var(--im-font-size,38px) * .58);line-height:1.55}
+    .html-card details{margin:0}.html-card details>summary{cursor:default;list-style:none}.html-card summary::-webkit-details-marker{display:none}
+    .overflow-beat{max-height:72vh;overflow:auto;padding-right:10px}
   `;
 }
 
@@ -446,10 +542,13 @@ function ensureLayerCount(count) {
 function measureBeats() {
   beatHeights = [];
   beatCenters = [];
+  beatScale = [];
+  beatOverflow = [];
   if (!stage || !beats.length) return;
   const settings = getSettings();
+  const shrinkOn = settings.shrinkOversizedBeats !== false;
+  const maxH = (stage.clientHeight || window.innerHeight || 800) * 0.72;
   const measurer = document.createElement('div');
-  measurer.className = 'layer im-measure';
   measurer.style.position = 'absolute';
   measurer.style.visibility = 'hidden';
   measurer.style.opacity = '0';
@@ -458,7 +557,11 @@ function measureBeats() {
   stage.appendChild(measurer);
   for (let i = 0; i < beats.length; i++) {
     const beat = beats[i];
-    if (beat.isCode) {
+    measurer.style.fontSize = '';
+    if (beat.isHtml) {
+      measurer.className = 'layer im-measure html-card';
+      measurer.innerHTML = `${beat.html}`;
+    } else if (beat.isCode) {
       measurer.className = 'layer im-measure code-beat';
       measurer.innerHTML = `${beat.html}`;
     } else {
@@ -466,7 +569,20 @@ function measureBeats() {
       const who = beat.who ? `<span class="who">${escapeHtml(beat.who)}</span>` : '';
       measurer.innerHTML = `${who}<span class="txt">${beat.html}</span>`;
     }
-    beatHeights[i] = measurer.offsetHeight || (Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize) * 1.55;
+    let h = measurer.offsetHeight || (Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize) * 1.55;
+    // Option A: shrink an oversized prose beat's font until it fits, then re-measure its true height.
+    let scale = 1;
+    if (shrinkOn && !beat.isHtml && !beat.isCode && h > maxH) {
+      scale = Math.max(0.5, maxH / h);
+      measurer.style.fontSize = `calc(var(--im-font-size, 38px) * ${scale.toFixed(3)})`;
+      h = measurer.offsetHeight || h;
+      if (h > maxH) {
+        beatOverflow[i] = true;
+        h = maxH;
+      }
+    }
+    beatScale[i] = scale;
+    beatHeights[i] = h;
   }
   measurer.remove();
   // gap is the even breathing room between any two adjacent beats, independent of beat size
@@ -504,11 +620,15 @@ function renderLayer(layer, beatIndex, d) {
   const settings = getSettings();
   const who = beat.who ? `<span class="who">${escapeHtml(beat.who)}</span>` : '';
   const id = settings.showMessageIds && beat.id ? `<span class="who">${escapeHtml(beat.id)}</span>` : '';
-  if (beat.isCode) {
+  layer.classList.remove('code-beat', 'html-card', 'overflow-beat');
+  if (beatOverflow[beatIndex]) layer.classList.add('overflow-beat');
+  if (beat.isHtml) {
+    layer.classList.add('html-card');
+    layer.innerHTML = `${beat.html}${id}`;
+  } else if (beat.isCode) {
     layer.classList.add('code-beat');
     layer.innerHTML = `${beat.html}${id}`;
   } else {
-    layer.classList.remove('code-beat');
     layer.innerHTML = `${who}<span class="txt">${beat.html}</span>${id}`;
   }
   const displayMode = settings.displayMode || 'rotary';
@@ -522,12 +642,15 @@ function renderLayer(layer, beatIndex, d) {
     opacity = Math.min(1, activeCurve + ghostTail);
   } else opacity = Math.exp(-Math.pow(dn / 0.40, 2));
   const y = centerPixelFor(beatIndex) - centerPixelFor(visual);
-  // Code beats stay flat (no rotary tilt / scale distortion) so the code stays readable.
-  const scale = beat.isCode ? (0.96 + 0.04 * Math.min(1, opacity * 4)) : (displayMode === 'teleprompter' ? 0.82 + 0.18 * Math.min(1, opacity * 3) : 0.9 + 0.1 * Math.min(1, opacity * 4));
-  const rot = (!beat.isCode && displayMode === 'rotary') ? ` rotateX(${clamp(d, -2, 2) * -34}deg)` : '';
+  const flat = beat.isCode || beat.isHtml; // cards/code stay flat & readable, no rotary tilt
+  // Auto-shrink oversized prose beats so they never overflow the screen (Option A).
+  const shrink = (!flat && beatScale[beatIndex] != null) ? beatScale[beatIndex] : 1;
+  layer.style.fontSize = (!flat && shrink < 1) ? `calc(var(--im-font-size, 38px) * ${shrink.toFixed(3)})` : '';
+  const scale = flat ? (0.96 + 0.04 * Math.min(1, opacity * 4)) : (displayMode === 'teleprompter' ? 0.82 + 0.18 * Math.min(1, opacity * 3) : 0.9 + 0.1 * Math.min(1, opacity * 4));
+  const rot = (!flat && displayMode === 'rotary') ? ` rotateX(${clamp(d, -2, 2) * -34}deg)` : '';
   layer.style.transform = `translate3d(-50%, calc(-50% + ${y.toFixed(2)}px), 0)${rot} scale(${scale.toFixed(3)})`;
   layer.style.opacity = opacity.toFixed(3);
-  layer.style.filter = (!beat.isCode && contextPreview && dn > 0.25) ? `blur(${Math.min(2.2, dn * 1.15).toFixed(2)}px)` : 'none';
+  layer.style.filter = (!flat && contextPreview && dn > 0.25) ? `blur(${Math.min(2.2, dn * 1.15).toFixed(2)}px)` : 'none';
   layer.style.visibility = opacity < 0.002 ? 'hidden' : 'visible';
 }
 
@@ -918,6 +1041,7 @@ async function addSettingsUi() {
   container.find('.im_show_inmode_controls').prop('checked', settings.showInModeControls).on('change', function () { settings.showInModeControls = !!$(this).prop('checked'); saveSettings(); applyOverlaySettings(); });
   container.find('.im_hide_st_chrome').prop('checked', settings.hideStChrome).on('change', function () { settings.hideStChrome = !!$(this).prop('checked'); saveSettings(); applyOverlaySettings(); });
   container.find('.im_context_preview').prop('checked', settings.contextPreview).on('change', function () { settings.contextPreview = !!$(this).prop('checked'); saveSettings(); paint(); });
+  container.find('.im_shrink_oversized').prop('checked', settings.shrinkOversizedBeats).on('change', function () { settings.shrinkOversizedBeats = !!$(this).prop('checked'); saveSettings(); remeasureAndPaint(); });
   container.find('.im_prevent_code_html').prop('checked', settings.preventCodeHtmlCapture).on('change', function () { settings.preventCodeHtmlCapture = !!$(this).prop('checked'); saveSettings(); });
   container.find('.im_use_rendered_html').prop('checked', settings.useRenderedHtml).on('change', function () { settings.useRenderedHtml = !!$(this).prop('checked'); saveSettings(); if (host && activeMessageId !== null) remeasureAndPaint(); });
   container.find('.im_skip_details_blocks').prop('checked', settings.skipDetailsBlocks).on('change', function () { settings.skipDetailsBlocks = !!$(this).prop('checked'); saveSettings(); if (host && activeMessageId !== null) remeasureAndPaint(); });
@@ -982,7 +1106,7 @@ async function addSettingsUi() {
 
 function registerEvents() { eventSource.makeLast(event_types.CHARACTER_MESSAGE_RENDERED, (messageId, type) => { const message = chat[messageId]; if (!message || message.is_user || message.is_system) return; if (getSettings().autoOpen && ['normal', 'continue', 'swipe'].includes(type || 'normal')) openMessage(Number(messageId)); }); eventSource.on(event_types.STREAM_TOKEN_RECEIVED, updateStreamingMessage); eventSource.on(event_types.CHAT_CHANGED, closeImmersive); }
 function registerSlashCommand() { SlashCommandParser.addCommandObject(SlashCommand.fromProps({ name: 'immersive', callback: () => { openLatestAssistant(); return ''; }, helpString: 'Open Immersive Mode for the latest assistant message.' })); }
-function exposePublicApi() { globalThis.SillyTavernImmersiveMode = { openLatest: openLatestAssistant, openMessage, close: closeImmersive, debugOpenHtml(html, name = 'Seraphine') { createOverlay(); activeMessageId = -1; beats = buildBeatsFromMessage({ mes: String(html || ''), name, is_user: false, is_system: false }, 'debug'); resetMotion(); host.classList.remove('closing'); host.style.opacity = ''; host.style.transition = ''; host.classList.add('open'); document.body.classList.add('immersive-mode-active'); applyOverlaySettings(); measureBeats(); paint(); }, getState() { return { activeMessageId, beats: beats.map(b => stripTags(b.html)), index, targetIndex, visual, targetVisual, open: host?.classList.contains('open') || false, renderedLayers: layers.length }; }, debugSegmentHtml(html) { return buildBeatsFromMessage({ mes: String(html || ''), name: 'debug', is_user: false, is_system: false }, 'debug').map(b => stripTags(b.html)); }, debugSetSettings(next) { Object.assign(getSettings(), next || {}); saveSettings(); if (host) applyOverlaySettings(); } }; }
+function exposePublicApi() { globalThis.SillyTavernImmersiveMode = { openLatest: openLatestAssistant, openMessage, close: closeImmersive, debugOpenHtml(html, name = 'Seraphine') { createOverlay(); activeMessageId = -1; beats = buildBeatsFromMessage({ mes: String(html || ''), name, is_user: false, is_system: false }, 'debug'); resetMotion(); host.classList.remove('closing'); host.style.opacity = ''; host.style.transition = ''; host.classList.add('open'); document.body.classList.add('immersive-mode-active'); applyOverlaySettings(); measureBeats(); paint(); }, getState() { return { activeMessageId, beats: beats.map(b => stripTags(b.html)), beatHtml: beats.map(b => b.html), index, targetIndex, visual, targetVisual, open: host?.classList.contains('open') || false, renderedLayers: layers.length }; }, debugSegmentHtml(html) { return buildBeatsFromMessage({ mes: String(html || ''), name: 'debug', is_user: false, is_system: false }, 'debug').map(b => stripTags(b.html)); }, debugNormalizeHtml(html) { currentPreserved = []; const normalized = normalizeMessageText(String(html || ''), (getSettings().contentMode || 'rp') === 'general'); return { normalized, tokens: tokenizeIntoBeats(normalized), currentPreserved }; }, debugSetSettings(next) { Object.assign(getSettings(), next || {}); saveSettings(); if (host) applyOverlaySettings(); } }; }
 
 async function init() { if (initialized) return; initialized = true; getSettings(); await addSettingsUi(); createOverlay(); addMessageButton(); addSendButton(); attachDelegatedHandlers(); registerEvents(); registerSlashCommand(); exposePublicApi(); console.log('[Immersive Mode] Loaded layered reader engine.'); }
 init().catch(error => { console.error('[Immersive Mode] Init failed:', error); toastr?.error?.(`Init failed: ${error?.message || error}`, 'Immersive Mode'); });

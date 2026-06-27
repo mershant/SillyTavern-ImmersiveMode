@@ -31,7 +31,7 @@
           <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px">
             <label class="checkbox_label"><input type="checkbox" class="im_split_big_blocks" /> Split big narration blocks</label>
             <label class="checkbox_label"><input type="checkbox" class="im_use_rendered_html" /> Use SillyTavern's rendered output (honors regex &amp; markdown)</label>
-            <label class="checkbox_label"><input type="checkbox" class="im_skip_details_blocks" /> Skip collapsible cards (&lt;details&gt;, e.g. NPC/SECRET trackers)</label>
+            <label class="checkbox_label"><input type="checkbox" class="im_skip_details_blocks" /> Skip rendered &lt;details&gt; cards instead of showing them</label>
             <label class="checkbox_label"><input type="checkbox" class="im_prevent_code_html" /> Prevent stray HTML/code from being captured</label>
             <label class="checkbox_label"><input type="checkbox" class="im_exclude_bracket_pipes" /> Ignore bracket choices like [a|b]</label>
           </div>
@@ -39,9 +39,9 @@
           <div style="margin-top:10px"><label>Special Blocks <span style="opacity:.6">(experimental)</span></label></div>
           <div style="display:flex; flex-direction:column; gap:8px">
             <label class="checkbox_label"><input type="checkbox" class="im_special_code" /> Render code blocks as code cards</label>
-            <label class="checkbox_label"><input type="checkbox" class="im_special_html" /> Render HTML blocks as code cards</label>
+            <label class="checkbox_label"><input type="checkbox" class="im_special_html" /> Render HTML / regex output live (colors, cards)</label>
           </div>
-          <small>Pulls code/HTML out into their own fitted card beats. Works in both RP and General mode.</small>
+          <small>Default off. When a special block type is enabled, stray HTML/code prevention is skipped for that type so they do not conflict.</small>
         </div>
       </div>
 
@@ -80,6 +80,7 @@
 
           <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px">
             <label class="checkbox_label"><input type="checkbox" class="im_context_preview" /> Show previous/next context ghosts</label>
+            <label class="checkbox_label"><input type="checkbox" class="im_shrink_oversized" /> Shrink oversized prose beats to fit screen</label>
             <label class="checkbox_label"><input type="checkbox" class="im_show_progress" /> Show progress rail</label>
             <label class="checkbox_label"><input type="checkbox" class="im_show_message_ids" /> Show subtle message IDs</label>
             <label class="checkbox_label"><input type="checkbox" class="im_show_inmode_controls" /> Show in-mode reading controls</label>
