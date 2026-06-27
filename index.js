@@ -27,6 +27,10 @@ const DEFAULT_SETTINGS = {
   hideStChrome: false,
   contextPreview: true,
   preventCodeHtmlCapture: true,
+  excludeBracketPipes: true,
+  mobileSwipeNavigation: true,
+  showSendButton: true,
+  streamCapture: true,
   emphasisAtomicMax: 140,
 };
 
@@ -62,10 +66,13 @@ let settleTo = 0;
 let settleStart = 0;
 let settleDur = 520;
 let dragging = false;
+let dragStartX = 0;
 let dragStartY = 0;
 let dragStartOffset = 0;
 let lastTs = performance.now();
 let rafStarted = false;
+let streamingMessageId = null;
+let lastStreamingUpdate = 0;
 
 function getSettings() {
   extension_settings[EXTENSION_KEY] = extension_settings[EXTENSION_KEY] || {};
@@ -95,7 +102,7 @@ function normalizeMessageText(html) {
   const settings = getSettings();
   const div = document.createElement('div');
   div.innerHTML = String(html || '');
-  div.querySelectorAll('script, style, .directional-roadway-panel').forEach(x => x.remove());
+  div.querySelectorAll('script, style, .directional-roadway-panel, .mes_reasoning, .mes_reasoning_details').forEach(x => x.remove());
   if (settings.preventCodeHtmlCapture) {
     div.querySelectorAll('pre, code, kbd, samp').forEach(x => x.remove());
   }
@@ -113,6 +120,9 @@ function normalizeMessageText(html) {
       .replace(/&lt;\/?[a-z][\s\S]*?&gt;/gi, ' ')
       .replace(/\n{3,}/g, '\n\n')
       .trim();
+  }
+  if (settings.excludeBracketPipes) {
+    text = text.replace(/\[[^\]\n]*\|[^\]\n]*\]/g, ' ').replace(/\s{2,}/g, ' ').trim();
   }
   return text;
 }
@@ -348,6 +358,31 @@ function openLatestAssistant() {
   toastr?.warning?.('No assistant message found.', 'Immersive Mode');
 }
 
+function updateStreamingMessage() {
+  const settings = getSettings();
+  if (!settings.streamCapture) return;
+  const now = performance.now();
+  if (now - lastStreamingUpdate < 120) return;
+  lastStreamingUpdate = now;
+  const messageId = chat.length - 1;
+  const message = chat[messageId];
+  if (!message || message.is_user || message.is_system) return;
+  const nextBeats = buildBeatsFromMessage(message, messageId);
+  if (!nextBeats.length) return;
+  createOverlay();
+  activeMessageId = Number(messageId);
+  beats = nextBeats;
+  index = clamp(index, 0, Math.max(0, beats.length - 1));
+  renderBeats();
+  overlay.classList.remove('im-closing');
+  overlay.style.opacity = '';
+  overlay.style.transition = '';
+  overlay.classList.add('im-open');
+  document.body.classList.add('immersive-mode-active');
+  applyOverlaySettings();
+  if (!rafStarted) { rafStarted = true; requestAnimationFrame(loop); }
+}
+
 function finishCloseImmersive() {
   overlay?.classList.remove('im-open', 'im-closing');
   if (overlay) { overlay.style.opacity = ''; overlay.style.transition = ''; }
@@ -489,6 +524,7 @@ function attachMotionHandlers() {
   stage.addEventListener('pointerdown', event => {
     dragging = true;
     inputStarted();
+    dragStartX = event.clientX;
     dragStartY = event.clientY;
     dragStartOffset = offset;
     stage.classList.add('im-drag');
@@ -500,9 +536,17 @@ function attachMotionHandlers() {
     offset = clamp(dragStartOffset - (event.clientY - dragStartY) / dragStep, -0.95, 0.95);
     velocity = 0;
   });
-  stage.addEventListener('pointerup', () => {
+  stage.addEventListener('pointerup', event => {
     dragging = false;
     stage.classList.remove('im-drag');
+    const dx = event.clientX - dragStartX;
+    const dy = event.clientY - dragStartY;
+    if (getSettings().mobileSwipeNavigation && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.25) {
+      offset = 0;
+      velocity = 0;
+      startSettle(index + (dx < 0 ? 1 : -1));
+      return;
+    }
     thresholdResolve();
   });
 
@@ -533,6 +577,17 @@ function addMessageButton() {
   updateMessageButtonVisibility();
 }
 
+function addSendButton() {
+  if ($('#rightSendForm .im_send_immersive_button').length) return;
+  const button = $('<div title="Open immersive reader" class="fa-solid fa-book-open interactable im_send_immersive_button" tabindex="0"></div>');
+  $('#rightSendForm').prepend(button);
+  updateSendButtonVisibility();
+}
+
+function updateSendButtonVisibility() {
+  document.body.classList.toggle('im-send-button-hidden', !getSettings().showSendButton);
+}
+
 function updateMessageButtonVisibility() {
   const visible = !!getSettings().showButton;
   $('.mes_immersive_mode_button').toggle(visible);
@@ -542,6 +597,9 @@ function attachDelegatedHandlers() {
   $(document).off('click.immersiveModeButton').on('click.immersiveModeButton', '.mes_immersive_mode_button', function () {
     const messageId = Number($(this).closest('.mes').attr('mesid'));
     openMessage(messageId);
+  });
+  $(document).off('click.immersiveModeSendButton').on('click.immersiveModeSendButton', '.im_send_immersive_button', function () {
+    openLatestAssistant();
   });
 }
 
@@ -561,6 +619,10 @@ async function addSettingsUi() {
   container.find('.im_hide_st_chrome').prop('checked', settings.hideStChrome).on('change', function () { settings.hideStChrome = !!$(this).prop('checked'); saveSettings(); applyOverlaySettings(); });
   container.find('.im_context_preview').prop('checked', settings.contextPreview).on('change', function () { settings.contextPreview = !!$(this).prop('checked'); saveSettings(); paint(); });
   container.find('.im_prevent_code_html').prop('checked', settings.preventCodeHtmlCapture).on('change', function () { settings.preventCodeHtmlCapture = !!$(this).prop('checked'); saveSettings(); if (overlay && activeMessageId !== null) renderBeats(); });
+  container.find('.im_exclude_bracket_pipes').prop('checked', settings.excludeBracketPipes).on('change', function () { settings.excludeBracketPipes = !!$(this).prop('checked'); saveSettings(); if (overlay && activeMessageId !== null) renderBeats(); });
+  container.find('.im_mobile_swipe').prop('checked', settings.mobileSwipeNavigation).on('change', function () { settings.mobileSwipeNavigation = !!$(this).prop('checked'); saveSettings(); });
+  container.find('.im_stream_capture').prop('checked', settings.streamCapture).on('change', function () { settings.streamCapture = !!$(this).prop('checked'); saveSettings(); });
+  container.find('.im_show_send_button').prop('checked', settings.showSendButton).on('change', function () { settings.showSendButton = !!$(this).prop('checked'); saveSettings(); updateSendButtonVisibility(); });
   container.find('.im_extraction_mode').val(settings.extractionMode).on('change', function () { settings.extractionMode = String($(this).val() || 'sentence'); saveSettings(); if (overlay && activeMessageId !== null) renderBeats(); });
   container.find('.im_display_mode').val(settings.displayMode).on('change', function () { settings.displayMode = String($(this).val() || 'spotlight'); saveSettings(); paint(); });
   container.find('.im_position').val(settings.position).on('change', function () { settings.position = String($(this).val() || 'center'); saveSettings(); applyOverlaySettings(); });
@@ -580,6 +642,7 @@ function registerEvents() {
     if (!message || message.is_user || message.is_system) return;
     if (getSettings().autoOpen && ['normal', 'continue', 'swipe'].includes(type || 'normal')) openMessage(Number(messageId));
   });
+  eventSource.on(event_types.STREAM_TOKEN_RECEIVED, updateStreamingMessage);
   eventSource.on(event_types.CHAT_CHANGED, closeImmersive);
 }
 
@@ -631,6 +694,7 @@ async function init() {
   await addSettingsUi();
   createOverlay();
   addMessageButton();
+  addSendButton();
   attachDelegatedHandlers();
   registerEvents();
   registerSlashCommand();

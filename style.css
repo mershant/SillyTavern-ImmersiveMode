@@ -24,6 +24,11 @@ body.immersive-mode-active.im-hide-st-chrome #form_sheld {
 
 .immersive_mode_settings small { opacity: 0.75; }
 
+.mes_immersive_mode_button,
+.im_send_immersive_button { color: inherit; }
+
+.im-send-button-hidden .im_send_immersive_button { display: none !important; }
+
 .im-overlay {
   position: fixed;
   inset: 48px 0 105px 0;
