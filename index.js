@@ -39,6 +39,8 @@ const DEFAULT_SETTINGS = {
   previewAhead: 2,
   previewBehind: 2,
   preventCodeHtmlCapture: true,
+  useRenderedHtml: true,
+  skipDetailsBlocks: true,
   excludeBracketPipes: true,
   mobileSwipeNavigation: true,
   showSendButton: true,
@@ -144,6 +146,8 @@ function normalizeMessageText(html, generalMode) {
   const div = document.createElement('div');
   div.innerHTML = String(html || '');
   div.querySelectorAll('script, style, .directional-roadway-panel, .mes_reasoning, .mes_reasoning_details').forEach(x => x.remove());
+  // Regex-rendered reference cards (e.g. [NPC]/[SECRET] turned into <details>) are meta UI, not prose.
+  if (settings.skipDetailsBlocks) div.querySelectorAll('details').forEach(x => x.remove());
   // When special blocks are enabled we've already pulled them out upstream, so don't strip here.
   const stripCode = settings.preventCodeHtmlCapture && !settings.specialCode;
   if (stripCode) div.querySelectorAll('pre, code, kbd, samp').forEach(x => x.remove());
@@ -245,6 +249,7 @@ function extractSpecialBlocks(rawHtml, opts) {
   const segments = [];
   const div = document.createElement('div');
   div.innerHTML = String(rawHtml || '');
+  if (getSettings().skipDetailsBlocks) div.querySelectorAll('details').forEach(x => x.remove());
   if (wantCode) {
     div.querySelectorAll('pre').forEach(pre => {
       const codeEl = pre.querySelector('code');
@@ -292,13 +297,24 @@ function unescapeMaybe(s) {
 
 function getMessageName(message) { if (message?.name) return message.name; return message?.is_user ? 'You' : 'Assistant'; }
 
+// Prefer the rendered .mes_text DOM so SillyTavern's display regex + markdown are already applied
+// (e.g. [NPC:MAJOR|...] turned into <details> cards). Falls back to the raw stored mes.
+function getMessageSourceHtml(message, messageId) {
+  if (getSettings().useRenderedHtml && messageId !== 'debug' && messageId != null) {
+    const el = document.querySelector(`#chat .mes[mesid="${messageId}"] .mes_text`);
+    if (el && el.innerHTML && el.innerHTML.trim()) return el.innerHTML;
+  }
+  return message?.mes || '';
+}
+
 function buildBeatsFromMessage(message, messageId) {
   const settings = getSettings();
+  const sourceHtml = getMessageSourceHtml(message, messageId);
   const generalMode = (settings.contentMode || 'rp') === 'general';
   const wantSpecial = settings.specialCode || settings.specialHtml;
   let rawBeats = [];
   if (wantSpecial) {
-    const segments = extractSpecialBlocks(message?.mes || '', { code: settings.specialCode, html: settings.specialHtml });
+    const segments = extractSpecialBlocks(sourceHtml, { code: settings.specialCode, html: settings.specialHtml });
     for (const seg of segments) {
       if (seg.type === 'code' || seg.type === 'html') {
         if (String(seg.code).trim()) rawBeats.push({ block: seg.type, lang: seg.lang, text: seg.code });
@@ -309,7 +325,7 @@ function buildBeatsFromMessage(message, messageId) {
       }
     }
   } else {
-    const text = normalizeMessageText(message?.mes || '', generalMode);
+    const text = normalizeMessageText(sourceHtml, generalMode);
     const raw = settings.splitBigBlocks ? (generalMode ? tokenizePlain(text) : tokenizeIntoBeats(text)) : [text];
     rawBeats = raw.filter(x => String(x).trim()).map(t => ({ block: '', text: t }));
   }
@@ -534,11 +550,12 @@ function paint() {
 
 function openMessage(messageId) {
   const message = chat[messageId];
-  if (!message || message.is_system) return;
+  // Hidden messages get is_system=true in SillyTavern; still allow opening them on explicit request.
+  if (!message) return;
   activeMessageId = Number(messageId);
   createOverlay();
   beats = buildBeatsFromMessage(message, activeMessageId);
-  if (!beats.length) return;
+  if (!beats.length) { toastr?.info?.('Nothing to read in this message.', 'Immersive Mode'); return; }
   resetMotion();
   host.classList.remove('closing'); host.style.opacity = ''; host.style.transition = '';
   host.classList.add('open');
@@ -902,6 +919,8 @@ async function addSettingsUi() {
   container.find('.im_hide_st_chrome').prop('checked', settings.hideStChrome).on('change', function () { settings.hideStChrome = !!$(this).prop('checked'); saveSettings(); applyOverlaySettings(); });
   container.find('.im_context_preview').prop('checked', settings.contextPreview).on('change', function () { settings.contextPreview = !!$(this).prop('checked'); saveSettings(); paint(); });
   container.find('.im_prevent_code_html').prop('checked', settings.preventCodeHtmlCapture).on('change', function () { settings.preventCodeHtmlCapture = !!$(this).prop('checked'); saveSettings(); });
+  container.find('.im_use_rendered_html').prop('checked', settings.useRenderedHtml).on('change', function () { settings.useRenderedHtml = !!$(this).prop('checked'); saveSettings(); if (host && activeMessageId !== null) remeasureAndPaint(); });
+  container.find('.im_skip_details_blocks').prop('checked', settings.skipDetailsBlocks).on('change', function () { settings.skipDetailsBlocks = !!$(this).prop('checked'); saveSettings(); if (host && activeMessageId !== null) remeasureAndPaint(); });
   container.find('.im_exclude_bracket_pipes').prop('checked', settings.excludeBracketPipes).on('change', function () { settings.excludeBracketPipes = !!$(this).prop('checked'); saveSettings(); });
   container.find('.im_mobile_swipe').prop('checked', settings.mobileSwipeNavigation).on('change', function () { settings.mobileSwipeNavigation = !!$(this).prop('checked'); saveSettings(); });
   container.find('.im_stream_capture').prop('checked', settings.streamCapture).on('change', function () { settings.streamCapture = !!$(this).prop('checked'); saveSettings(); });
