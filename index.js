@@ -16,6 +16,7 @@ const DEFAULT_SETTINGS = {
   scrollMode: 'threshold',
   scrollBehavior: 'drag',
   scrollFeel: 'glide',
+  dragSensitivity: 1,
   extractionMode: 'sentence',
   contentMode: 'rp',
   specialCode: false,
@@ -42,6 +43,7 @@ const DEFAULT_SETTINGS = {
   useRenderedHtml: true,
   skipDetailsBlocks: false,
   shrinkOversizedBeats: true,
+  includeAsteriskSeparators: false,
   excludeBracketPipes: true,
   mobileSwipeNavigation: true,
   showSendButton: true,
@@ -83,6 +85,9 @@ let speedHint;
 let autoBtn;
 let autoScrollRaf = null;
 let autoScrollLastTs = 0;
+let autoScrollPaused = false;
+let autoScrollResumeAt = 0;
+let autoScrollCurrentSpeed = 0;
 let fontRange;
 let chromeButton;
 let activeMessageId = null;
@@ -188,6 +193,10 @@ function normalizeMessageText(html, generalMode) {
     });
   }
   let text = (div.textContent || '').replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim();
+  if (!settings.includeAsteriskSeparators) {
+    // ST/markdown horizontal rules like *** should not become blank/awkward immersive beats by default.
+    text = text.replace(/(^|\n)\s*\*{3,}\s*(?=\n|$)/g, '$1').replace(/\n{3,}/g, '\n\n').trim();
+  }
   if (stripCode) {
     text = text
       .replace(/```[\s\S]*?```/g, ' ')
@@ -205,6 +214,9 @@ function normalizeMessageText(html, generalMode) {
 }
 
 function renderBeatHtml(text) {
+  if (/^\s*\*{3,}\s*$/.test(String(text || ''))) {
+    return getSettings().includeAsteriskSeparators ? '<span class="im-separator">✦ ✦ ✦</span>' : '';
+  }
   let safe = escapeHtml(text);
   // Bold/highlight pops
   safe = safe.replace(/==([^=]+)==/g, '<span class="im-pop">$1</span>');
@@ -213,6 +225,8 @@ function renderBeatHtml(text) {
   safe = safe.replace(/^\*([^]+)\*$/g, '<em>$1</em>');
   // Inline italics for any remaining *paired* asterisks (handles general mode markdown emphasis)
   safe = safe.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+  // Optional visible markdown separators
+  if (getSettings().includeAsteriskSeparators) safe = safe.replace(/(?:^|\s)\*{3,}(?:\s|$)/g, '<span class="im-separator">✦ ✦ ✦</span>');
   // Drop any stray unpaired asterisks so they don't render as literal *
   safe = safe.replace(/\*/g, '');
   // Restore preserved inline HTML (color spans etc.) captured during normalization.
@@ -442,7 +456,7 @@ function shadowCss() {
     .stage{position:absolute;inset:0;overflow:hidden;perspective:1000px;pointer-events:auto;touch-action:none;user-select:none;cursor:grab}.stage.drag{cursor:grabbing}
     .layer{position:absolute;top:50%;left:50%;width:min(750px,88vw);text-align:center;font-size:var(--im-font-size,38px);line-height:1.55;letter-spacing:.12px;transform-style:preserve-3d;will-change:transform,opacity;backface-visibility:hidden;text-wrap:balance;}
     :host(.position-top) .layer{top:30%}:host(.position-center) .layer{top:50%}:host(.position-bottom) .layer{top:70%}
-    .who{display:block;font-family:system-ui,sans-serif;font-size:11px;letter-spacing:2.6px;text-transform:uppercase;color:#7e8796;margin-bottom:12px;font-weight:500}.txt{display:inline;text-wrap:balance}.pop{font-weight:650;color:#fff;-webkit-text-fill-color:#fff;background:linear-gradient(120deg,transparent,rgba(255,207,107,.52));background-size:100% 82%;background-repeat:no-repeat;background-position:0 64%;padding:0 .1em;border-radius:4px;text-shadow:0 0 18px rgba(255,207,107,.45)}
+    .who{display:block;font-family:system-ui,sans-serif;font-size:11px;letter-spacing:2.6px;text-transform:uppercase;color:#7e8796;margin-bottom:12px;font-weight:500}.txt{display:inline;text-wrap:balance}.im-separator{display:inline-block;font-family:system-ui,sans-serif;font-size:.42em;letter-spacing:.65em;color:rgba(214,168,79,.48);vertical-align:middle}.pop{font-weight:650;color:#fff;-webkit-text-fill-color:#fff;background:linear-gradient(120deg,transparent,rgba(255,207,107,.52));background-size:100% 82%;background-repeat:no-repeat;background-position:0 64%;padding:0 .1em;border-radius:4px;text-shadow:0 0 18px rgba(255,207,107,.45)}
     :host(.material-pearl) .txt{background:linear-gradient(180deg,#fff 0%,#e7edf7 55%,#aeb9ca 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;text-shadow:0 0 1px rgba(255,255,255,.7),0 0 10px rgba(230,240,255,.18),0 0 26px rgba(150,180,220,.12)}
     :host(.material-crystal) .txt{background:linear-gradient(176deg,#fff 0%,#f5f9ff 42%,#cfd9eb 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;filter:drop-shadow(0 0 2px rgba(255,255,255,.55)) drop-shadow(0 0 16px rgba(170,205,255,.38))}
     :host(.material-etched) .txt{color:rgba(246,243,235,.92);text-shadow:0 1px 0 rgba(255,255,255,.2),0 -1px 0 rgba(0,0,0,.6),0 0 14px rgba(210,225,255,.14)}
@@ -851,24 +865,49 @@ function inputStarted() {
     cancelAnimationFrame(transitionRaf);
     transitionRaf = null;
   }
-  // Manual interaction cancels auto-scroll.
-  if (autoScrollRaf) { stopAutoScroll(); getSettings().autoScroll = false; }
+  pauseAutoScroll(520);
   updateFromVisualPosition();
+}
+
+function getDragSensitivity() {
+  return clamp(Number(getSettings().dragSensitivity) || DEFAULT_SETTINGS.dragSensitivity, 0.65, 1.25);
+}
+
+function pauseAutoScroll(ms = 420) {
+  if (!autoScrollRaf || !getSettings().autoScroll) return;
+  autoScrollPaused = true;
+  autoScrollResumeAt = Math.max(autoScrollResumeAt, performance.now() + ms);
+  // Do not zero current speed instantly — it decays in startAutoScroll() so resuming feels continuous.
+}
+
+function resumeAutoScrollSoon(ms = 180) {
+  if (!autoScrollRaf || !getSettings().autoScroll) return;
+  autoScrollPaused = true;
+  autoScrollResumeAt = Math.max(autoScrollResumeAt, performance.now() + ms);
 }
 
 function startAutoScroll() {
   if (autoScrollRaf) return;
   autoScrollLastTs = performance.now();
+  autoScrollPaused = false;
+  autoScrollResumeAt = 0;
+  autoScrollCurrentSpeed = 0;
   if (autoBtn) autoBtn.classList.add('active');
   const step = now => {
     const dt = Math.min(3, Math.max(0.5, (now - autoScrollLastTs) / 16.67));
     autoScrollLastTs = now;
-    if (dragging || transitionRaf || glideRaf) { autoScrollRaf = requestAnimationFrame(step); return; }
-    const speed = Number(getSettings().autoScrollSpeed) || DEFAULT_SETTINGS.autoScrollSpeed;
-    visual = clamp(visual + (speed / 60) * dt, 0, beats.length - 1);
-    targetVisual = visual;
-    updateFromVisualPosition();
-    paint();
+    const desired = Number(getSettings().autoScrollSpeed) || DEFAULT_SETTINGS.autoScrollSpeed;
+    const paused = dragging || transitionRaf || glideRaf || (autoScrollPaused && now < autoScrollResumeAt);
+    const targetSpeed = paused ? 0 : desired;
+    // Smooth speed recovery/decay: manual input halts auto; on release it eases back to speed.
+    autoScrollCurrentSpeed += (targetSpeed - autoScrollCurrentSpeed) * (paused ? 0.20 : 0.055) * dt;
+    if (autoScrollPaused && now >= autoScrollResumeAt && !dragging && !transitionRaf && !glideRaf) autoScrollPaused = false;
+    if (Math.abs(autoScrollCurrentSpeed) > 0.0005) {
+      visual = clamp(visual + (autoScrollCurrentSpeed / 60) * dt, 0, beats.length - 1);
+      targetVisual = visual;
+      updateFromVisualPosition();
+      paint();
+    }
     if (visual >= beats.length - 1) { stopAutoScroll(); refreshParkState(); return; }
     autoScrollRaf = requestAnimationFrame(step);
   };
@@ -877,6 +916,9 @@ function startAutoScroll() {
 
 function stopAutoScroll() {
   if (autoScrollRaf) { cancelAnimationFrame(autoScrollRaf); autoScrollRaf = null; }
+  autoScrollPaused = false;
+  autoScrollResumeAt = 0;
+  autoScrollCurrentSpeed = 0;
   if (autoBtn) autoBtn.classList.remove('active');
 }
 
@@ -967,7 +1009,7 @@ function attachMotionHandlers() {
       return;
     }
     inputStarted();
-    const delta = event.deltaY * getWeight().wheel;
+    const delta = event.deltaY * getWeight().wheel * getDragSensitivity();
     if (settings.scrollFeel === 'glide') startGlide(delta);
     else smoothDragTo(targetVisual + delta);
   }, { passive: false });
@@ -975,7 +1017,8 @@ function attachMotionHandlers() {
   stage.addEventListener('pointermove', event => {
     if (!dragging) return;
     const stepSize = Number(getSettings().spread) || DEFAULT_SETTINGS.spread;
-    visual = clamp(dragStartVisual - (event.clientY - dragStartY) / stepSize, 0, beats.length - 1);
+    const sensitivity = getDragSensitivity();
+    visual = clamp(dragStartVisual - ((event.clientY - dragStartY) / stepSize) * sensitivity, 0, beats.length - 1);
     targetVisual = visual;
     updateFromVisualPosition();
     paint();
@@ -983,7 +1026,7 @@ function attachMotionHandlers() {
     const dtMs = now - lastMoveTs;
     if (dtMs > 0) {
       // beats moved per frame from the pixel delta since last move
-      const beatsPerPx = 1 / stepSize;
+      const beatsPerPx = sensitivity / stepSize;
       const instVel = -((event.clientY - lastMoveY) * beatsPerPx) * (16.67 / dtMs);
       pointerVel = pointerVel * 0.5 + instVel * 0.5;
       lastMoveY = event.clientY;
@@ -1001,6 +1044,7 @@ function attachMotionHandlers() {
     if (settings.mobileSwipeNavigation && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.25) {
       offset = 0;
       startSettle(targetIndex + (dx < 0 ? 1 : -1));
+      resumeAutoScrollSoon(260);
       return;
     }
     // Barrier-based exit: if this drag started while parked at a boundary and pushed further toward it, exit.
@@ -1009,12 +1053,14 @@ function attachMotionHandlers() {
     // Vertical release: fling with momentum (native-feeling), regardless of touch or mouse
     if (settings.scrollBehavior === 'drag' && Math.abs(pointerVel) > 0.012) {
       flingWith(clamp(pointerVel, -0.9, 0.9));
+      resumeAutoScrollSoon(320);
       return;
     }
     if (settings.scrollBehavior !== 'drag') thresholdResolve();
     else refreshParkState();
+    resumeAutoScrollSoon(220);
   });
-  document.addEventListener('keydown', event => { if (!host?.classList.contains('open')) return; if (['ArrowDown', 'ArrowRight', 'Space'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(targetIndex + 1); } if (['ArrowUp', 'ArrowLeft'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(targetIndex - 1); } if (event.code === 'Escape') { event.preventDefault(); event.stopPropagation(); closeImmersive(); } }, true);
+  document.addEventListener('keydown', event => { if (!host?.classList.contains('open')) return; if (['ArrowDown', 'ArrowRight', 'Space'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); inputStarted(); startSettle(targetIndex + 1); resumeAutoScrollSoon(260); } if (['ArrowUp', 'ArrowLeft'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); inputStarted(); startSettle(targetIndex - 1); resumeAutoScrollSoon(260); } if (event.code === 'Escape') { event.preventDefault(); event.stopPropagation(); closeImmersive(); } }, true);
   let resizeTimer = null;
   window.addEventListener('resize', () => { if (!host?.classList.contains('open')) return; clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { applyOverlaySettings(); remeasureAndPaint(); }, 90); });
 }
@@ -1046,6 +1092,7 @@ async function addSettingsUi() {
   container.find('.im_use_rendered_html').prop('checked', settings.useRenderedHtml).on('change', function () { settings.useRenderedHtml = !!$(this).prop('checked'); saveSettings(); if (host && activeMessageId !== null) remeasureAndPaint(); });
   container.find('.im_skip_details_blocks').prop('checked', settings.skipDetailsBlocks).on('change', function () { settings.skipDetailsBlocks = !!$(this).prop('checked'); saveSettings(); if (host && activeMessageId !== null) remeasureAndPaint(); });
   container.find('.im_exclude_bracket_pipes').prop('checked', settings.excludeBracketPipes).on('change', function () { settings.excludeBracketPipes = !!$(this).prop('checked'); saveSettings(); });
+  container.find('.im_include_asterisk_separators').prop('checked', settings.includeAsteriskSeparators).on('change', function () { settings.includeAsteriskSeparators = !!$(this).prop('checked'); saveSettings(); if (host && activeMessageId !== null) remeasureAndPaint(); });
   container.find('.im_mobile_swipe').prop('checked', settings.mobileSwipeNavigation).on('change', function () { settings.mobileSwipeNavigation = !!$(this).prop('checked'); saveSettings(); });
   container.find('.im_stream_capture').prop('checked', settings.streamCapture).on('change', function () { settings.streamCapture = !!$(this).prop('checked'); saveSettings(); });
   container.find('.im_show_send_button').prop('checked', settings.showSendButton).on('change', function () { settings.showSendButton = !!$(this).prop('checked'); saveSettings(); updateSendButtonVisibility(); });
@@ -1067,6 +1114,8 @@ async function addSettingsUi() {
   container.find('.im_weight').val(settings.weight).on('change', function () { settings.weight = String($(this).val() || 'heavy'); saveSettings(); });
   container.find('.im_material').val(settings.material).on('change', function () { settings.material = String($(this).val() || 'pearl'); saveSettings(); applyOverlaySettings(); });
   container.find('.im_threshold').val(settings.threshold).on('input change', function () { settings.threshold = Number($(this).val()) || DEFAULT_SETTINGS.threshold; saveSettings(); });
+  container.find('.im_drag_sensitivity').val(getDragSensitivity()).on('input change', function () { settings.dragSensitivity = clamp(Number($(this).val()) || DEFAULT_SETTINGS.dragSensitivity, 0.65, 1.25); saveSettings(); container.find('.im_drag_sensitivity_value').text(settings.dragSensitivity.toFixed(2)); });
+  container.find('.im_drag_sensitivity_value').text(getDragSensitivity().toFixed(2));
   container.find('.im_font_size').val(settings.fontSize).on('input change', function () { settings.fontSize = Number($(this).val()) || DEFAULT_SETTINGS.fontSize; saveSettings(); applyOverlaySettings(); remeasureAndPaint(); });
   container.find('.im_spread').val(settings.spread).on('input change', function () { settings.spread = Number($(this).val()) || DEFAULT_SETTINGS.spread; saveSettings(); remeasureAndPaint(); });
   const updatePreviewValues = () => {
@@ -1106,7 +1155,7 @@ async function addSettingsUi() {
 
 function registerEvents() { eventSource.makeLast(event_types.CHARACTER_MESSAGE_RENDERED, (messageId, type) => { const message = chat[messageId]; if (!message || message.is_user || message.is_system) return; if (getSettings().autoOpen && ['normal', 'continue', 'swipe'].includes(type || 'normal')) openMessage(Number(messageId)); }); eventSource.on(event_types.STREAM_TOKEN_RECEIVED, updateStreamingMessage); eventSource.on(event_types.CHAT_CHANGED, closeImmersive); }
 function registerSlashCommand() { SlashCommandParser.addCommandObject(SlashCommand.fromProps({ name: 'immersive', callback: () => { openLatestAssistant(); return ''; }, helpString: 'Open Immersive Mode for the latest assistant message.' })); }
-function exposePublicApi() { globalThis.SillyTavernImmersiveMode = { openLatest: openLatestAssistant, openMessage, close: closeImmersive, debugOpenHtml(html, name = 'Seraphine') { createOverlay(); activeMessageId = -1; beats = buildBeatsFromMessage({ mes: String(html || ''), name, is_user: false, is_system: false }, 'debug'); resetMotion(); host.classList.remove('closing'); host.style.opacity = ''; host.style.transition = ''; host.classList.add('open'); document.body.classList.add('immersive-mode-active'); applyOverlaySettings(); measureBeats(); paint(); }, getState() { return { activeMessageId, beats: beats.map(b => stripTags(b.html)), beatHtml: beats.map(b => b.html), index, targetIndex, visual, targetVisual, open: host?.classList.contains('open') || false, renderedLayers: layers.length }; }, debugSegmentHtml(html) { return buildBeatsFromMessage({ mes: String(html || ''), name: 'debug', is_user: false, is_system: false }, 'debug').map(b => stripTags(b.html)); }, debugNormalizeHtml(html) { currentPreserved = []; const normalized = normalizeMessageText(String(html || ''), (getSettings().contentMode || 'rp') === 'general'); return { normalized, tokens: tokenizeIntoBeats(normalized), currentPreserved }; }, debugSetSettings(next) { Object.assign(getSettings(), next || {}); saveSettings(); if (host) applyOverlaySettings(); } }; }
+function exposePublicApi() { globalThis.SillyTavernImmersiveMode = { openLatest: openLatestAssistant, openMessage, close: closeImmersive, debugOpenHtml(html, name = 'Seraphine') { createOverlay(); activeMessageId = -1; beats = buildBeatsFromMessage({ mes: String(html || ''), name, is_user: false, is_system: false }, 'debug'); resetMotion(); host.classList.remove('closing'); host.style.opacity = ''; host.style.transition = ''; host.classList.add('open'); document.body.classList.add('immersive-mode-active'); applyOverlaySettings(); measureBeats(); paint(); }, getState() { return { activeMessageId, beats: beats.map(b => stripTags(b.html)), beatHtml: beats.map(b => b.html), index, targetIndex, visual, targetVisual, autoScroll: !!autoScrollRaf, autoScrollPaused, autoScrollCurrentSpeed, autoScrollResumeAt, dragSensitivity: getDragSensitivity(), open: host?.classList.contains('open') || false, renderedLayers: layers.length }; }, debugSegmentHtml(html) { return buildBeatsFromMessage({ mes: String(html || ''), name: 'debug', is_user: false, is_system: false }, 'debug').map(b => stripTags(b.html)); }, debugNormalizeHtml(html) { currentPreserved = []; const normalized = normalizeMessageText(String(html || ''), (getSettings().contentMode || 'rp') === 'general'); return { normalized, tokens: tokenizeIntoBeats(normalized), currentPreserved }; }, debugSetSettings(next) { Object.assign(getSettings(), next || {}); saveSettings(); if (host) applyOverlaySettings(); }, debugSetAuto(on) { setAutoScroll(!!on); } }; }
 
 async function init() { if (initialized) return; initialized = true; getSettings(); await addSettingsUi(); createOverlay(); addMessageButton(); addSendButton(); attachDelegatedHandlers(); registerEvents(); registerSlashCommand(); exposePublicApi(); console.log('[Immersive Mode] Loaded layered reader engine.'); }
 init().catch(error => { console.error('[Immersive Mode] Init failed:', error); toastr?.error?.(`Init failed: ${error?.message || error}`, 'Immersive Mode'); });

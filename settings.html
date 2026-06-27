@@ -34,6 +34,7 @@
             <label class="checkbox_label"><input type="checkbox" class="im_skip_details_blocks" /> Skip rendered &lt;details&gt; cards instead of showing them</label>
             <label class="checkbox_label"><input type="checkbox" class="im_prevent_code_html" /> Prevent stray HTML/code from being captured</label>
             <label class="checkbox_label"><input type="checkbox" class="im_exclude_bracket_pipes" /> Ignore bracket choices like [a|b]</label>
+            <label class="checkbox_label"><input type="checkbox" class="im_include_asterisk_separators" /> Include *** separators as visible dividers</label>
           </div>
 
           <div style="margin-top:10px"><label>Special Blocks <span style="opacity:.6">(experimental)</span></label></div>
@@ -128,6 +129,10 @@
           <div style="margin-top:10px"><label>Threshold</label></div>
           <input type="range" class="im_threshold" min="0.25" max="0.75" step="0.01" />
           <small>How far you must scroll toward the next beat before it centers.</small>
+
+          <div style="margin-top:10px"><label>Drag / wheel sensitivity: <span class="im_drag_sensitivity_value">1.00</span>x</label></div>
+          <input type="range" class="im_drag_sensitivity" min="0.65" max="1.25" step="0.01" />
+          <small>Default 1.00x is the current feel. Lower is slightly slower, but the range is capped so dragging never becomes unusably slow.</small>
 
           <h4 style="margin-top:12px">Auto-scroll</h4>
           <label class="checkbox_label"><input type="checkbox" class="im_auto_scroll" /> Enable auto-scroll on open</label>
