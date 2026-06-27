@@ -18,8 +18,11 @@ const DEFAULT_SETTINGS = {
   scrollFeel: 'glide',
   extractionMode: 'sentence',
   contentMode: 'rp',
-  codeblockGeneral: true,
+  specialCode: false,
+  specialHtml: false,
   mobilePerformance: 'auto',
+  autoScroll: false,
+  autoScrollSpeed: 0.18,
   displayMode: 'rotary',
   position: 'center',
   weight: 'heavy',
@@ -54,6 +57,14 @@ const WEIGHTS = {
   fast: { wheel: 0.0058, threshold: 0.34, dur: 320 },
 };
 
+// Auto-scroll speed range + exponential mapping (slow at first, ramps up). Shared by the
+// in-overlay hold-drag control and the settings-drawer slider so both feel identical.
+const AS_MIN_SPEED = 0.03;
+const AS_MAX_SPEED = 1.2;
+const AS_EXP = 2.4;
+function asSpeedToFrac(s) { return clamp(Math.pow((clamp(s, AS_MIN_SPEED, AS_MAX_SPEED) - AS_MIN_SPEED) / (AS_MAX_SPEED - AS_MIN_SPEED), 1 / AS_EXP), 0, 1); }
+function asFracToSpeed(f) { return AS_MIN_SPEED + (AS_MAX_SPEED - AS_MIN_SPEED) * Math.pow(clamp(f, 0, 1), AS_EXP); }
+
 let initialized = false;
 let host;
 let root;
@@ -63,6 +74,10 @@ let beatHeights = [];
 let beatCenters = [];
 let fill;
 let meta;
+let speedHint;
+let autoBtn;
+let autoScrollRaf = null;
+let autoScrollLastTs = 0;
 let fontRange;
 let chromeButton;
 let activeMessageId = null;
@@ -84,6 +99,10 @@ let lastGlideTs = 0;
 let pointerVel = 0;
 let lastMoveY = 0;
 let lastMoveTs = 0;
+let parkedEnd = false;
+let parkedStart = false;
+let dragStartParkedEnd = false;
+let dragStartParkedStart = false;
 let targetIndex = 0;
 let dragStartTargetIndex = 0;
 let streamingMessageId = null;
@@ -105,6 +124,12 @@ function getSettings() {
     settings.exitAtStart = true;
     settings.displayDefaultsVersion = 4;
   }
+  if ((settings.displayDefaultsVersion || 0) < 5) {
+    // Migrate old single codeblockGeneral toggle into the new per-type special-block toggles (default off).
+    settings.specialCode = !!settings.codeblockGeneral && (settings.contentMode === 'general');
+    settings.specialHtml = false;
+    settings.displayDefaultsVersion = 5;
+  }
   return settings;
 }
 
@@ -119,7 +144,8 @@ function normalizeMessageText(html, generalMode) {
   const div = document.createElement('div');
   div.innerHTML = String(html || '');
   div.querySelectorAll('script, style, .directional-roadway-panel, .mes_reasoning, .mes_reasoning_details').forEach(x => x.remove());
-  const stripCode = settings.preventCodeHtmlCapture && !(generalMode && settings.codeblockGeneral);
+  // When special blocks are enabled we've already pulled them out upstream, so don't strip here.
+  const stripCode = settings.preventCodeHtmlCapture && !settings.specialCode;
   if (stripCode) div.querySelectorAll('pre, code, kbd, samp').forEach(x => x.remove());
   div.querySelectorAll('br').forEach(x => x.replaceWith('\n'));
   if (!generalMode) {
@@ -144,8 +170,15 @@ function normalizeMessageText(html, generalMode) {
 
 function renderBeatHtml(text) {
   let safe = escapeHtml(text);
+  // Bold/highlight pops
   safe = safe.replace(/==([^=]+)==/g, '<span class="im-pop">$1</span>');
+  safe = safe.replace(/\*\*([^*]+)\*\*/g, '<span class="im-pop">$1</span>');
+  // Whole-beat italic wrap (RP asterisk action line)
   safe = safe.replace(/^\*([^]+)\*$/g, '<em>$1</em>');
+  // Inline italics for any remaining *paired* asterisks (handles general mode markdown emphasis)
+  safe = safe.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+  // Drop any stray unpaired asterisks so they don't render as literal *
+  safe = safe.replace(/\*/g, '');
   return safe;
 }
 
@@ -205,29 +238,46 @@ function tokenizePlain(text) {
   return splitLongPlain(String(text || '')).filter(Boolean);
 }
 
-function extractCodeBlocks(rawHtml) {
-  // Pull fenced code blocks and <pre><code> out of the message, returning ordered segments.
+function extractSpecialBlocks(rawHtml, opts) {
+  // Pull code/HTML blocks out as ordered segments. opts = { code, html }.
+  const wantCode = !!opts.code;
+  const wantHtml = !!opts.html;
   const segments = [];
-  let html = String(rawHtml || '');
-  // Decode <pre><code>…</code></pre> into fenced form first so one regex handles both.
   const div = document.createElement('div');
-  div.innerHTML = html;
-  div.querySelectorAll('pre').forEach(pre => {
-    const codeEl = pre.querySelector('code');
-    const langClass = (codeEl?.className || pre.className || '').match(/language-([\w+-]+)/);
-    const lang = langClass ? langClass[1] : '';
-    const code = (codeEl?.textContent ?? pre.textContent ?? '').replace(/\s+$/, '');
-    pre.replaceWith(document.createTextNode(`\u0000CODE:${lang}\u0001${code}\u0000ENDCODE\u0000`));
-  });
+  div.innerHTML = String(rawHtml || '');
+  if (wantCode) {
+    div.querySelectorAll('pre').forEach(pre => {
+      const codeEl = pre.querySelector('code');
+      const langClass = (codeEl?.className || pre.className || '').match(/language-([\w+-]+)/);
+      const lang = langClass ? langClass[1] : '';
+      const code = (codeEl?.textContent ?? pre.textContent ?? '').replace(/\s+$/, '');
+      pre.replaceWith(document.createTextNode(`\u0000BLK:code:${lang}\u0001${code}\u0000ENDBLK\u0000`));
+    });
+  }
+  if (wantHtml) {
+    // Block-level HTML rendered by ST: capture its source markup as a special block.
+    div.querySelectorAll('table, svg, figure').forEach(el => {
+      const src = el.outerHTML.replace(/\s+$/, '');
+      el.replaceWith(document.createTextNode(`\u0000BLK:html:\u0001${src}\u0000ENDBLK\u0000`));
+    });
+  }
   let text = div.textContent || '';
-  // Fenced ```lang\n...```
-  text = text.replace(/```([\w+-]*)\n?([\s\S]*?)```/g, (m, lang, code) => `\u0000CODE:${lang || ''}\u0001${code.replace(/\s+$/, '')}\u0000ENDCODE\u0000`);
-  const parts = text.split(/\u0000ENDCODE\u0000/);
+  if (wantCode) {
+    text = text.replace(/```([\w+-]*)\n?([\s\S]*?)```/g, (m, lang, code) => {
+      const kind = (wantHtml && /^(html|xml|svg)$/i.test(lang)) ? 'html' : 'code';
+      return `\u0000BLK:${kind}:${lang || ''}\u0001${code.replace(/\s+$/, '')}\u0000ENDBLK\u0000`;
+    });
+  }
+  if (wantHtml) {
+    // Raw escaped HTML tag-soup blocks in plain text (e.g. &lt;div&gt;…&lt;/div&gt;)
+    text = text.replace(/(&lt;(div|table|ul|ol|section|article)\b[\s\S]*?&lt;\/\2&gt;)/gi, (m) => `\u0000BLK:html:\u0001${m}\u0000ENDBLK\u0000`);
+  }
+  const parts = text.split(/\u0000ENDBLK\u0000/);
   for (const part of parts) {
-    const codeMatch = part.match(/^([\s\S]*?)\u0000CODE:([\w+-]*)\u0001([\s\S]*)$/);
-    if (codeMatch) {
-      if (codeMatch[1].trim()) segments.push({ type: 'text', text: codeMatch[1] });
-      segments.push({ type: 'code', lang: codeMatch[2] || '', code: codeMatch[3] });
+    const blkMatch = part.match(/^([\s\S]*?)\u0000BLK:(code|html):([\w+-]*)\u0001([\s\S]*)$/);
+    if (blkMatch) {
+      if (blkMatch[1].trim()) segments.push({ type: 'text', text: blkMatch[1] });
+      segments.push({ type: blkMatch[2], lang: blkMatch[3] || '', code: blkMatch[2] === 'html' ? unescapeMaybe(blkMatch[4]) : blkMatch[4] });
     } else if (part.trim()) {
       segments.push({ type: 'text', text: part });
     }
@@ -235,38 +285,44 @@ function extractCodeBlocks(rawHtml) {
   return segments;
 }
 
+function unescapeMaybe(s) {
+  // textContent already decodes entities for real elements; for escaped tag-soup decode &lt; etc.
+  return String(s).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#039;/g, "'");
+}
+
 function getMessageName(message) { if (message?.name) return message.name; return message?.is_user ? 'You' : 'Assistant'; }
 
 function buildBeatsFromMessage(message, messageId) {
   const settings = getSettings();
   const generalMode = (settings.contentMode || 'rp') === 'general';
-  const wantCodeBeats = generalMode && settings.codeblockGeneral;
+  const wantSpecial = settings.specialCode || settings.specialHtml;
   let rawBeats = [];
-  if (wantCodeBeats) {
-    // Segment around code blocks; code becomes its own special beat, text is plain-split.
-    const segments = extractCodeBlocks(message?.mes || '');
+  if (wantSpecial) {
+    const segments = extractSpecialBlocks(message?.mes || '', { code: settings.specialCode, html: settings.specialHtml });
     for (const seg of segments) {
-      if (seg.type === 'code') {
-        if (seg.code.trim()) rawBeats.push({ code: true, lang: seg.lang, text: seg.code });
+      if (seg.type === 'code' || seg.type === 'html') {
+        if (String(seg.code).trim()) rawBeats.push({ block: seg.type, lang: seg.lang, text: seg.code });
       } else {
-        const cleaned = normalizeMessageText(seg.text, true);
-        for (const t of tokenizePlain(cleaned)) rawBeats.push({ code: false, text: t });
+        const cleaned = normalizeMessageText(seg.text, generalMode);
+        const tokens = settings.splitBigBlocks ? (generalMode ? tokenizePlain(cleaned) : tokenizeIntoBeats(cleaned)) : [cleaned];
+        for (const t of tokens) if (String(t).trim()) rawBeats.push({ block: '', text: t });
       }
     }
   } else {
     const text = normalizeMessageText(message?.mes || '', generalMode);
     const raw = settings.splitBigBlocks ? (generalMode ? tokenizePlain(text) : tokenizeIntoBeats(text)) : [text];
-    rawBeats = raw.filter(x => String(x).trim()).map(t => ({ code: false, text: t }));
+    rawBeats = raw.filter(x => String(x).trim()).map(t => ({ block: '', text: t }));
   }
   return rawBeats
-    .filter(b => b.code ? String(b.text).trim() : String(b.text).trim())
-    .map((b, i) => b.code
-      ? { html: renderCodeBeatHtml(b.text, b.lang), who: '', id: i === 0 ? `#${messageId}` : '', isCode: true }
+    .filter(b => String(b.text).trim())
+    .map((b, i) => b.block
+      ? { html: renderCodeBeatHtml(b.text, b.lang, b.block), who: '', id: i === 0 ? `#${messageId}` : '', isCode: true }
       : { html: renderBeatHtml(b.text), who: i === 0 ? getMessageName(message) : '', id: i === 0 ? `#${messageId}` : '', isCode: false });
 }
 
-function renderCodeBeatHtml(code, lang) {
-  const label = lang ? `<span class="code-lang">${escapeHtml(lang)}</span>` : '';
+function renderCodeBeatHtml(code, lang, kind) {
+  const tag = kind === 'html' ? (lang || 'html') : (lang || 'code');
+  const label = `<span class="code-lang">${escapeHtml(tag)}</span>`;
   return `${label}${escapeHtml(code)}`;
 }
 
@@ -283,7 +339,9 @@ function shadowCss() {
     :host(.material-etched) .txt{color:rgba(246,243,235,.92);text-shadow:0 1px 0 rgba(255,255,255,.2),0 -1px 0 rgba(0,0,0,.6),0 0 14px rgba(210,225,255,.14)}
     :host(.material-liquid) .txt{background:linear-gradient(90deg,#eaf6ff 0%,#fff 42%,#d8e8ff 70%,#fff2c6 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;filter:drop-shadow(0 0 3px rgba(255,255,255,.65)) drop-shadow(0 0 22px rgba(130,190,255,.42))}
     .close,.pill{border:1px solid rgba(255,255,255,.08);background:rgba(10,12,18,.45);color:#9aa3b2;border-radius:999px;padding:7px 12px;font-family:system-ui,sans-serif;font-size:12px;cursor:pointer;backdrop-filter:blur(12px);pointer-events:auto}.close:hover,.pill:hover,.pill.active{color:#fff;border-color:rgba(255,255,255,.18)}
-    .topbar{position:absolute;top:14px;right:16px;z-index:3;display:flex;align-items:center;gap:8px;pointer-events:auto}.toggle-chrome{font-size:15px;line-height:1;padding:6px 11px}
+    .topbar{position:absolute;top:14px;right:16px;z-index:3;display:flex;align-items:center;gap:8px;pointer-events:auto}.toggle-chrome{font-size:15px;line-height:1;padding:6px 11px}.close{font-size:13px;line-height:1;padding:7px 11px}
+    .autoscroll{font-size:11px;letter-spacing:.3px}.autoscroll.active{color:#ffcf6b;border-color:rgba(255,207,107,.4);background:rgba(255,207,107,.12)}
+    .speed-hint{position:absolute;left:50%;bottom:108px;transform:translateX(-50%);z-index:4;font-family:system-ui,sans-serif;font-size:12px;color:#ffcf6b;background:rgba(10,12,18,.7);border:1px solid rgba(255,207,107,.3);border-radius:999px;padding:6px 14px;opacity:0;pointer-events:none;transition:opacity 140ms ease;backdrop-filter:blur(10px)}.speed-hint.show{opacity:1}
     .controls{position:absolute;left:50%;bottom:52px;transform:translateX(-50%);z-index:3;display:flex;align-items:center;gap:8px;font-family:system-ui,sans-serif;opacity:.72;transition:opacity 180ms ease;pointer-events:auto}.controls:hover{opacity:1}:host(:not(.show-controls)) .controls{display:none}.range{width:120px;accent-color:#ffcf6b;pointer-events:auto}
     .hud{position:absolute;left:0;right:0;bottom:20px;z-index:2;display:flex;flex-direction:column;align-items:center;gap:8px;font-family:system-ui,sans-serif;pointer-events:none}:host(:not(.show-progress)) .hud{display:none}.rail{width:min(320px,46vw);height:2px;background:rgba(255,255,255,.06);border-radius:9px;overflow:hidden}.fill{height:100%;width:0;background:linear-gradient(90deg,rgba(180,205,255,.7),#ffcf6b)}.meta{font-size:10.5px;color:#5d6573;letter-spacing:1px}
     @media (max-width:900px),(pointer:coarse){:host,:host(.hide-chrome){inset:0;min-height:100dvh}.stage{min-height:100dvh}.layer{width:min(86vw,560px);font-size:var(--im-font-size,32px);line-height:1.62;letter-spacing:.02px}:host(.position-top) .layer{top:24%}:host(.position-center) .layer{top:47%}:host(.position-bottom) .layer{top:65%}.topbar{top:calc(env(safe-area-inset-top,0px) + 10px);right:10px}.close{padding:8px 12px}.controls{bottom:calc(env(safe-area-inset-bottom,0px) + 72px);width:auto;justify-content:center;gap:10px;opacity:.82}.pill{padding:9px 13px;font-size:13px;min-width:44px}.hud{bottom:calc(env(safe-area-inset-bottom,0px) + 30px)}.rail{width:min(58vw,260px)}}
@@ -301,15 +359,18 @@ function createOverlay() {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = host.attachShadow({ mode: 'open' });
-  root.innerHTML = `<style>${shadowCss()}</style><div class="topbar"><button class="pill toggle-chrome" title="Hide/show SillyTavern bars" aria-label="Toggle bars">⤢</button><button class="close">exit</button></div><div class="stage"></div><div class="controls"><button class="pill font-down" title="Smaller text">A−</button><button class="pill font-up" title="Larger text">A+</button></div><div class="hud"><div class="rail"><div class="fill"></div></div><div class="meta">— / —</div></div>`;
+  root.innerHTML = `<style>${shadowCss()}</style><div class="topbar"><button class="pill toggle-chrome" title="Hide/show SillyTavern bars" aria-label="Toggle bars">⤢</button><button class="close" title="Exit" aria-label="Exit">✕</button></div><div class="stage"></div><div class="controls"><button class="pill font-down" title="Smaller text">A−</button><button class="pill font-up" title="Larger text">A+</button><button class="pill autoscroll" title="Auto-scroll (tap to toggle; press &amp; drag left/right to set speed)" aria-label="Auto-scroll">▶ auto</button></div><div class="hud"><div class="rail"><div class="fill"></div></div><div class="meta">— / —</div></div><div class="speed-hint">Auto-scroll speed</div>`;
   stage = root.querySelector('.stage');
   layers = [];
   fill = root.querySelector('.fill');
   meta = root.querySelector('.meta');
+  speedHint = root.querySelector('.speed-hint');
+  autoBtn = root.querySelector('.autoscroll');
   root.querySelector('.close').addEventListener('click', closeImmersive);
   root.querySelector('.font-down').addEventListener('click', () => adjustFontSize(-2));
   root.querySelector('.font-up').addEventListener('click', () => adjustFontSize(2));
   root.querySelector('.toggle-chrome').addEventListener('click', () => { const settings = getSettings(); settings.hideStChrome = !settings.hideStChrome; saveSettings(); applyOverlaySettings(); remeasureAndPaint(); });
+  attachAutoScrollControl();
   attachMotionHandlers();
 }
 
@@ -319,7 +380,7 @@ function remeasureAndPaint() {
   paint();
 }
 
-function resetMotion() { index = 0; targetIndex = 0; visual = 0; targetVisual = 0; offset = 0; dragging = false; }
+function resetMotion() { index = 0; targetIndex = 0; visual = 0; targetVisual = 0; offset = 0; dragging = false; parkedEnd = false; parkedStart = false; }
 function adjustFontSize(delta) { const settings = getSettings(); settings.fontSize = clamp((Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize) + delta, 18, 64); saveSettings(); applyOverlaySettings(); remeasureAndPaint(); }
 
 function isMobileViewport() {
@@ -466,9 +527,9 @@ function paint() {
   for (let r = -behind; r <= ahead; r++) roles.push(r);
   ensureLayerCount(roles.length);
   roles.forEach((role, i) => renderLayer(layers[i], center + role, (center + role) - visual));
-  const progress = beats.length > 0 ? visual / beats.length : 0;
+  const progress = beats.length > 1 ? visual / (beats.length - 1) : 1;
   fill.style.width = `${clamp(progress, 0, 1) * 100}%`;
-  meta.textContent = index >= beats.length ? 'END' : `${Math.round(visual) + 1} / ${beats.length}`;
+  meta.textContent = `${Math.round(visual) + 1} / ${beats.length}`;
 }
 
 function openMessage(messageId) {
@@ -485,6 +546,7 @@ function openMessage(messageId) {
   applyOverlaySettings();
   measureBeats();
   paint();
+  if (getSettings().autoScroll) startAutoScroll();
 }
 
 function openLatestAssistant() { for (let i = chat.length - 1; i >= 0; i--) { if (chat[i] && !chat[i].is_user && !chat[i].is_system) { openMessage(i); return; } } toastr?.warning?.('No assistant message found.', 'Immersive Mode'); }
@@ -515,27 +577,15 @@ function updateStreamingMessage() {
   paint();
 }
 
-function finishCloseImmersive() { host?.classList.remove('open', 'closing'); if (host) { host.style.opacity = ''; host.style.transition = ''; } document.body.classList.remove('immersive-mode-active', 'im-hide-st-chrome'); }
+function finishCloseImmersive() { stopAutoScroll(); host?.classList.remove('open', 'closing'); if (host) { host.style.opacity = ''; host.style.transition = ''; } document.body.classList.remove('immersive-mode-active', 'im-hide-st-chrome'); }
 function fadeCloseImmersive() { if (!host?.classList.contains('open') || host.classList.contains('closing')) return; host.classList.add('closing'); host.style.transition = 'opacity 420ms ease'; host.style.opacity = '0'; setTimeout(finishCloseImmersive, 430); }
 function closeImmersive() { fadeCloseImmersive(); }
 
 function startSettle(toIndex) {
-  const settings = getSettings();
-  const atEnd = toIndex >= beats.length;
-  const atStart = toIndex < 0;
-  // Past the last beat
-  if (atEnd) {
-    if (settings.exitAtEnd) { fadeCloseImmersive(); return; }
-    // exitAtEnd off: allow an empty END state, exit only on a second push past it
-    if (index >= beats.length) { fadeCloseImmersive(); return; }
-    toIndex = beats.length; // empty END sentinel
-  }
-  // Before the first beat
-  if (atStart) {
-    if (settings.exitAtStart) { fadeCloseImmersive(); return; }
-    toIndex = 0;
-  }
-  toIndex = clamp(toIndex, 0, beats.length);
+  // Barrier-based exit: if already parked at a boundary and pushing further, exit.
+  if (toIndex > index && attemptBoundaryExit(1)) return;
+  if (toIndex < index && attemptBoundaryExit(-1)) return;
+  toIndex = clamp(toIndex, 0, beats.length - 1);
   targetIndex = toIndex;
   if (transitionRaf) cancelAnimationFrame(transitionRaf);
   if (dragRaf) { cancelAnimationFrame(dragRaf); dragRaf = null; }
@@ -550,27 +600,31 @@ function startSettle(toIndex) {
     visual = from + (to - from) * easeOutCubic(t);
     paint();
     if (t < 1) transitionRaf = requestAnimationFrame(step);
-    else { index = to; targetIndex = to; visual = to; offset = 0; transitionRaf = null; paint(); }
+    else { index = to; targetIndex = to; visual = to; offset = 0; transitionRaf = null; paint(); refreshParkState(); }
   }
   transitionRaf = requestAnimationFrame(step);
 }
 
 function thresholdResolve() {
   const threshold = Number(getSettings().threshold) || getWeight().threshold;
-  const base = Math.round(clamp(visual, 0, beats.length));
+  const base = Math.round(clamp(visual, 0, beats.length - 1));
   if (offset >= threshold) startSettle(base + 1);
   else if (offset <= -threshold) startSettle(base - 1);
+  else refreshParkState();
 }
 function getWeight() { return WEIGHTS[getSettings().weight] || WEIGHTS.heavy; }
 
 function updateFromVisualPosition() {
   index = Math.floor(clamp(visual, 0, Math.max(0, beats.length - 1)));
-  targetIndex = Math.round(clamp(visual, 0, beats.length));
+  targetIndex = Math.round(clamp(visual, 0, beats.length - 1));
   offset = visual - index;
+  // Moving away from a boundary clears its parked flag (so re-arriving requires a fresh push to exit).
+  if (!atEndBoundary()) parkedEnd = false;
+  if (!atStartBoundary()) parkedStart = false;
 }
 
 function smoothDragTo(nextTarget) {
-  targetVisual = clamp(nextTarget, 0, beats.length);
+  targetVisual = clamp(nextTarget, 0, beats.length - 1);
   if (dragRaf) return;
   const step = () => {
     const diff = targetVisual - visual;
@@ -579,6 +633,7 @@ function smoothDragTo(nextTarget) {
       updateFromVisualPosition();
       paint();
       dragRaf = null;
+      refreshParkState();
       return;
     }
     visual += diff * 0.22;
@@ -589,6 +644,23 @@ function smoothDragTo(nextTarget) {
   dragRaf = requestAnimationFrame(step);
 }
 
+function atEndBoundary() { return visual >= (beats.length - 1) - 0.001; }
+function atStartBoundary() { return visual <= 0.001; }
+
+function refreshParkState() {
+  // Parked = motion is resting against a boundary. Set only when essentially stopped there.
+  parkedEnd = atEndBoundary();
+  parkedStart = atStartBoundary();
+}
+
+// Barrier-based exit: if already parked at a boundary and the user pushes that way again, exit.
+function attemptBoundaryExit(dir) {
+  const settings = getSettings();
+  if (dir > 0 && atEndBoundary() && parkedEnd && settings.exitAtEnd) { fadeCloseImmersive(); return true; }
+  if (dir < 0 && atStartBoundary() && parkedStart && settings.exitAtStart) { fadeCloseImmersive(); return true; }
+  return false;
+}
+
 function startGlide(delta) {
   if (dragRaf) { cancelAnimationFrame(dragRaf); dragRaf = null; }
   glideVelocity += delta * 0.18;
@@ -597,13 +669,8 @@ function startGlide(delta) {
   const step = now => {
     const dt = Math.min(2.2, Math.max(0.5, (now - lastGlideTs) / 16.67));
     lastGlideTs = now;
-    const settings = getSettings();
-    const next = visual + glideVelocity * dt;
-    // Only exit on a deliberate, fast overscroll past the boundary — not a gentle arrival.
-    if (next > beats.length + 0.04 && glideVelocity > 0.02 && settings.exitAtEnd) { glideVelocity = 0; glideRaf = null; fadeCloseImmersive(); return; }
-    if (next < -0.04 && glideVelocity < -0.02 && settings.exitAtStart) { glideVelocity = 0; glideRaf = null; fadeCloseImmersive(); return; }
-    visual = clamp(next, 0, beats.length);
-    if (visual <= 0 || visual >= beats.length) glideVelocity = 0;
+    visual = clamp(visual + glideVelocity * dt, 0, beats.length - 1);
+    if (visual <= 0 || visual >= beats.length - 1) glideVelocity = 0;
     glideVelocity *= Math.pow(0.925, dt);
     targetVisual = visual;
     updateFromVisualPosition();
@@ -611,6 +678,7 @@ function startGlide(delta) {
     if (Math.abs(glideVelocity) < 0.0009) {
       glideVelocity = 0;
       glideRaf = null;
+      refreshParkState();
       return;
     }
     glideRaf = requestAnimationFrame(step);
@@ -626,18 +694,13 @@ function flingWith(velocity) {
   const step = now => {
     const dt = Math.min(2.2, Math.max(0.5, (now - lastGlideTs) / 16.67));
     lastGlideTs = now;
-    const settings = getSettings();
-    const next = visual + glideVelocity * dt;
-    // Require a clear push past the edge with real momentum, so a fling that merely reaches the edge does not exit.
-    if (next > beats.length + 0.06 && glideVelocity > 0.05 && settings.exitAtEnd) { glideVelocity = 0; glideRaf = null; fadeCloseImmersive(); return; }
-    if (next < -0.06 && glideVelocity < -0.05 && settings.exitAtStart) { glideVelocity = 0; glideRaf = null; fadeCloseImmersive(); return; }
-    visual = clamp(next, 0, beats.length);
-    if (visual <= 0 || visual >= beats.length) glideVelocity = 0;
+    visual = clamp(visual + glideVelocity * dt, 0, beats.length - 1);
+    if (visual <= 0 || visual >= beats.length - 1) glideVelocity = 0;
     glideVelocity *= Math.pow(0.94, dt);
     targetVisual = visual;
     updateFromVisualPosition();
     paint();
-    if (Math.abs(glideVelocity) < 0.0009) { glideVelocity = 0; glideRaf = null; return; }
+    if (Math.abs(glideVelocity) < 0.0009) { glideVelocity = 0; glideRaf = null; refreshParkState(); return; }
     glideRaf = requestAnimationFrame(step);
   };
   glideRaf = requestAnimationFrame(step);
@@ -648,7 +711,110 @@ function inputStarted() {
     cancelAnimationFrame(transitionRaf);
     transitionRaf = null;
   }
+  // Manual interaction cancels auto-scroll.
+  if (autoScrollRaf) { stopAutoScroll(); getSettings().autoScroll = false; }
   updateFromVisualPosition();
+}
+
+function startAutoScroll() {
+  if (autoScrollRaf) return;
+  autoScrollLastTs = performance.now();
+  if (autoBtn) autoBtn.classList.add('active');
+  const step = now => {
+    const dt = Math.min(3, Math.max(0.5, (now - autoScrollLastTs) / 16.67));
+    autoScrollLastTs = now;
+    if (dragging || transitionRaf || glideRaf) { autoScrollRaf = requestAnimationFrame(step); return; }
+    const speed = Number(getSettings().autoScrollSpeed) || DEFAULT_SETTINGS.autoScrollSpeed;
+    visual = clamp(visual + (speed / 60) * dt, 0, beats.length - 1);
+    targetVisual = visual;
+    updateFromVisualPosition();
+    paint();
+    if (visual >= beats.length - 1) { stopAutoScroll(); refreshParkState(); return; }
+    autoScrollRaf = requestAnimationFrame(step);
+  };
+  autoScrollRaf = requestAnimationFrame(step);
+}
+
+function stopAutoScroll() {
+  if (autoScrollRaf) { cancelAnimationFrame(autoScrollRaf); autoScrollRaf = null; }
+  if (autoBtn) autoBtn.classList.remove('active');
+}
+
+function setAutoScroll(on) {
+  getSettings().autoScroll = !!on;
+  saveSettings();
+  if (on) startAutoScroll(); else stopAutoScroll();
+}
+
+function attachAutoScrollControl() {
+  if (!autoBtn) return;
+  let pressTimer = null;
+  let pressing = false;   // pointer button is physically down on the control
+  let holding = false;    // hold-to-adjust gesture engaged
+  let anchorX = 0;
+  let gestureStartFrac = 0;
+  let moved = false;
+  let capturedId = null;
+  // Full comfortable drag (~300px) sweeps the whole normalized range.
+  const PX_PER_RANGE = 300;
+
+  const beginHold = () => {
+    holding = true;
+    // Anchor to current speed (as a fraction) so re-dragging continues smoothly, no reset.
+    gestureStartFrac = asSpeedToFrac(Number(getSettings().autoScrollSpeed) || DEFAULT_SETTINGS.autoScrollSpeed);
+    if (speedHint) speedHint.classList.add('show');
+    updateSpeedHint();
+  };
+
+  const releaseCapture = () => {
+    if (capturedId !== null) { try { autoBtn.releasePointerCapture(capturedId); } catch (e) { /* ignore */ } capturedId = null; }
+  };
+
+  autoBtn.addEventListener('pointerdown', event => {
+    event.preventDefault();
+    pressing = true;
+    anchorX = event.clientX;
+    moved = false;
+    holding = false;
+    capturedId = event.pointerId;
+    try { autoBtn.setPointerCapture(event.pointerId); } catch (e) { capturedId = null; }
+    pressTimer = setTimeout(beginHold, 200);
+  });
+  autoBtn.addEventListener('pointermove', event => {
+    if (!pressing) return; // ignore plain hover — only adjust while the button is actually held down
+    if (!holding) {
+      if (Math.abs(event.clientX - anchorX) > 6) { clearTimeout(pressTimer); beginHold(); }
+      else return;
+    }
+    moved = true;
+    const frac = gestureStartFrac + (event.clientX - anchorX) / PX_PER_RANGE;
+    getSettings().autoScrollSpeed = asFracToSpeed(frac);
+    updateSpeedHint();
+  });
+  const endGesture = () => {
+    clearTimeout(pressTimer);
+    releaseCapture();
+    if (speedHint) speedHint.classList.remove('show');
+    const wasHoldAdjust = holding && moved;
+    pressing = false;
+    holding = false;
+    moved = false;
+    if (wasHoldAdjust) {
+      saveSettings();
+      if (!autoScrollRaf) setAutoScroll(true); // keep scrolling at the chosen speed
+      return;
+    }
+    // Simple tap = toggle on/off
+    setAutoScroll(!autoScrollRaf);
+  };
+  autoBtn.addEventListener('pointerup', endGesture);
+  autoBtn.addEventListener('pointercancel', () => { clearTimeout(pressTimer); releaseCapture(); pressing = false; holding = false; moved = false; if (speedHint) speedHint.classList.remove('show'); });
+}
+
+function updateSpeedHint() {
+  if (!speedHint) return;
+  const s = Number(getSettings().autoScrollSpeed) || DEFAULT_SETTINGS.autoScrollSpeed;
+  speedHint.textContent = `Auto-scroll speed: ${s.toFixed(2)}`;
 }
 
 function attachMotionHandlers() {
@@ -665,11 +831,11 @@ function attachMotionHandlers() {
     if (settings.scrollFeel === 'glide') startGlide(delta);
     else smoothDragTo(targetVisual + delta);
   }, { passive: false });
-  stage.addEventListener('pointerdown', event => { dragging = true; inputStarted(); if (dragRaf) { cancelAnimationFrame(dragRaf); dragRaf = null; } if (glideRaf) { cancelAnimationFrame(glideRaf); glideRaf = null; glideVelocity = 0; } dragStartX = event.clientX; dragStartY = event.clientY; dragStartVisual = visual; dragStartOffset = offset; pointerVel = 0; lastMoveY = event.clientY; lastMoveTs = performance.now(); stage.classList.add('drag'); stage.setPointerCapture(event.pointerId); });
+  stage.addEventListener('pointerdown', event => { dragging = true; inputStarted(); if (dragRaf) { cancelAnimationFrame(dragRaf); dragRaf = null; } if (glideRaf) { cancelAnimationFrame(glideRaf); glideRaf = null; glideVelocity = 0; } dragStartX = event.clientX; dragStartY = event.clientY; dragStartVisual = visual; dragStartOffset = offset; dragStartParkedEnd = parkedEnd; dragStartParkedStart = parkedStart; pointerVel = 0; lastMoveY = event.clientY; lastMoveTs = performance.now(); stage.classList.add('drag'); stage.setPointerCapture(event.pointerId); });
   stage.addEventListener('pointermove', event => {
     if (!dragging) return;
     const stepSize = Number(getSettings().spread) || DEFAULT_SETTINGS.spread;
-    visual = clamp(dragStartVisual - (event.clientY - dragStartY) / stepSize, 0, beats.length);
+    visual = clamp(dragStartVisual - (event.clientY - dragStartY) / stepSize, 0, beats.length - 1);
     targetVisual = visual;
     updateFromVisualPosition();
     paint();
@@ -697,12 +863,16 @@ function attachMotionHandlers() {
       startSettle(targetIndex + (dx < 0 ? 1 : -1));
       return;
     }
+    // Barrier-based exit: if this drag started while parked at a boundary and pushed further toward it, exit.
+    if (dragStartParkedEnd && dy < -6 && atEndBoundary() && settings.exitAtEnd) { fadeCloseImmersive(); return; }
+    if (dragStartParkedStart && dy > 6 && atStartBoundary() && settings.exitAtStart) { fadeCloseImmersive(); return; }
     // Vertical release: fling with momentum (native-feeling), regardless of touch or mouse
     if (settings.scrollBehavior === 'drag' && Math.abs(pointerVel) > 0.012) {
       flingWith(clamp(pointerVel, -0.9, 0.9));
       return;
     }
     if (settings.scrollBehavior !== 'drag') thresholdResolve();
+    else refreshParkState();
   });
   document.addEventListener('keydown', event => { if (!host?.classList.contains('open')) return; if (['ArrowDown', 'ArrowRight', 'Space'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(targetIndex + 1); } if (['ArrowUp', 'ArrowLeft'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(targetIndex - 1); } if (event.code === 'Escape') { event.preventDefault(); event.stopPropagation(); closeImmersive(); } }, true);
   let resizeTimer = null;
@@ -737,8 +907,12 @@ async function addSettingsUi() {
   container.find('.im_stream_capture').prop('checked', settings.streamCapture).on('change', function () { settings.streamCapture = !!$(this).prop('checked'); saveSettings(); });
   container.find('.im_show_send_button').prop('checked', settings.showSendButton).on('change', function () { settings.showSendButton = !!$(this).prop('checked'); saveSettings(); updateSendButtonVisibility(); });
   container.find('.im_extraction_mode').val(settings.extractionMode).on('change', function () { settings.extractionMode = String($(this).val() || 'sentence'); saveSettings(); if (host && activeMessageId !== null) remeasureAndPaint(); });
-  container.find('.im_content_mode').val(settings.contentMode).on('change', function () { settings.contentMode = String($(this).val() || 'rp'); saveSettings(); });
-  container.find('.im_codeblock_general').prop('checked', settings.codeblockGeneral).on('change', function () { settings.codeblockGeneral = !!$(this).prop('checked'); saveSettings(); });
+  container.find('.im_content_mode').val(settings.contentMode).on('change', function () { settings.contentMode = String($(this).val() || 'rp'); saveSettings(); if (host && activeMessageId !== null) remeasureAndPaint(); });
+  container.find('.im_special_code').prop('checked', settings.specialCode).on('change', function () { settings.specialCode = !!$(this).prop('checked'); saveSettings(); if (host && activeMessageId !== null) remeasureAndPaint(); });
+  container.find('.im_special_html').prop('checked', settings.specialHtml).on('change', function () { settings.specialHtml = !!$(this).prop('checked'); saveSettings(); if (host && activeMessageId !== null) remeasureAndPaint(); });
+  container.find('.im_auto_scroll').prop('checked', settings.autoScroll).on('change', function () { settings.autoScroll = !!$(this).prop('checked'); saveSettings(); if (host && host.classList.contains('open')) setAutoScroll(settings.autoScroll); });
+  container.find('.im_auto_scroll_speed').val(asSpeedToFrac(Number(settings.autoScrollSpeed) || DEFAULT_SETTINGS.autoScrollSpeed)).on('input change', function () { settings.autoScrollSpeed = asFracToSpeed(Number($(this).val()) || 0); saveSettings(); container.find('.im_auto_scroll_speed_value').text(settings.autoScrollSpeed.toFixed(2)); });
+  container.find('.im_auto_scroll_speed_value').text((Number(settings.autoScrollSpeed) || DEFAULT_SETTINGS.autoScrollSpeed).toFixed(2));
   const updatePerfStatus = () => container.find('.im_perf_status').text('Currently: ' + (isPerfActive() ? 'ON' : 'off') + (isMobileViewport() ? ' (mobile detected)' : ' (desktop)'));
   container.find('.im_mobile_performance').val(settings.mobilePerformance).on('change', function () { settings.mobilePerformance = String($(this).val() || 'auto'); saveSettings(); applyOverlaySettings(); updatePerfStatus(); });
   updatePerfStatus();

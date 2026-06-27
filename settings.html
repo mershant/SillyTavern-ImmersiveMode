@@ -5,144 +5,158 @@
       <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
     </div>
     <div class="inline-drawer-content">
-      <div style="display:flex; flex-direction:column; gap:8px">
-        <label class="checkbox_label"><input type="checkbox" class="im_auto_open" /> Auto-open immersive mode for new assistant messages</label>
-        <label class="checkbox_label"><input type="checkbox" class="im_split_big_blocks" /> Split big narration blocks</label>
-        <label class="checkbox_label"><input type="checkbox" class="im_show_progress" /> Show progress rail</label>
-        <label class="checkbox_label"><input type="checkbox" class="im_show_message_ids" /> Show subtle message IDs</label>
-        <label class="checkbox_label"><input type="checkbox" class="im_show_button" /> Show immersive/details button on messages</label>
-        <label class="checkbox_label"><input type="checkbox" class="im_fade_on_end" /> Fade back to chat when the last beat finishes</label>
-        <label class="checkbox_label"><input type="checkbox" class="im_exit_at_end" /> Exit when scrolling past the end</label>
-        <label class="checkbox_label"><input type="checkbox" class="im_exit_at_start" /> Exit when scrolling before the start</label>
-        <label class="checkbox_label"><input type="checkbox" class="im_show_inmode_controls" /> Show in-mode reading controls</label>
-        <label class="checkbox_label"><input type="checkbox" class="im_hide_st_chrome" /> Hide top bar and chat bar while immersive is open</label>
-        <label class="checkbox_label"><input type="checkbox" class="im_context_preview" /> Show previous/next context ghosts</label>
-        <label class="checkbox_label"><input type="checkbox" class="im_prevent_code_html" /> Prevent HTML/code blocks from being captured</label>
-        <label class="checkbox_label"><input type="checkbox" class="im_exclude_bracket_pipes" /> Ignore bracket choices like [a|b]</label>
-        <label class="checkbox_label"><input type="checkbox" class="im_mobile_swipe" /> Mobile left/right swipe navigation</label>
-        <label class="checkbox_label"><input type="checkbox" class="im_show_send_button" /> Show immersive button beside Send</label>
-        <label class="checkbox_label"><input type="checkbox" class="im_stream_capture" /> Capture streaming assistant responses</label>
+
+      <div style="margin-top:6px; display:flex; gap:8px; flex-wrap:wrap">
+        <button class="menu_button im_open_now">Open latest message</button>
+        <button class="menu_button im_close_now">Close</button>
       </div>
 
-      <div style="margin-top:10px">
-        <label>Content Mode</label>
-      </div>
-      <select class="text_pole im_content_mode">
-        <option value="rp">RP mode (segregate quotes &amp; emphasis)</option>
-        <option value="general">General mode (plain text)</option>
-      </select>
-      <label class="checkbox_label" style="margin-top:6px"><input type="checkbox" class="im_codeblock_general" /> General: render code blocks as code cards <span style="opacity:.6">(experimental)</span></label>
-
-      <div style="margin-top:10px">
-        <label>Extraction Mode</label>
-      </div>
-      <select class="text_pole im_extraction_mode">
-        <option value="sentence">Per sentence</option>
-        <option value="punctuation">Per punctuation</option>
-        <option value="balanced">Balanced blocks</option>
-      </select>
-
-      <div style="margin-top:10px">
-        <label>Display Mode</label>
-      </div>
-      <select class="text_pole im_display_mode">
-        <option value="spotlight">Spotlight</option>
-        <option value="teleprompter">Teleprompter</option>
-        <option value="rotary">Rotary</option>
-      </select>
-
-      <div style="margin-top:10px">
-        <label>Text Position</label>
-      </div>
-      <select class="text_pole im_position">
-        <option value="center">Center</option>
-        <option value="top">Top</option>
-        <option value="bottom">Bottom</option>
-      </select>
-
-      <div style="margin-top:10px">
-        <label>Scroll Mode</label>
-      </div>
-      <select class="text_pole im_scroll_mode">
-        <option value="threshold">Threshold</option>
-        <option value="step">Single-step</option>
-      </select>
-
-      <div style="margin-top:10px">
-        <label>Scroll Behavior</label>
-      </div>
-      <select class="text_pole im_scroll_behavior">
-        <option value="drag">Drag / free position</option>
-        <option value="swipe">Swipe / one beat per scroll</option>
-      </select>
-
-      <div style="margin-top:10px">
-        <label>Scroll Feel</label>
-      </div>
-      <select class="text_pole im_scroll_feel">
-        <option value="natural">Natural Scroll</option>
-        <option value="glide">Glide Scroll</option>
-      </select>
-
-      <div style="margin-top:10px">
-        <label>Scroll Weight</label>
-      </div>
-      <select class="text_pole im_weight">
-        <option value="heavy">Heavy</option>
-        <option value="silk">Silk</option>
-        <option value="fast">Fast</option>
-      </select>
-
-      <div style="margin-top:10px">
-        <label>Glass Text Material</label>
-      </div>
-      <select class="text_pole im_material">
-        <option value="pearl">Pearl</option>
-        <option value="crystal">Crystal</option>
-        <option value="etched">Etched</option>
-        <option value="liquid">Liquid</option>
-      </select>
-
-      <div style="margin-top:10px">
-        <label>Threshold</label>
-      </div>
-      <input type="range" class="im_threshold" min="0.25" max="0.75" step="0.01" />
-      <small>How far you must scroll toward the next beat before it centers automatically.</small>
-
-      <div style="margin-top:10px">
-        <label>Font Size</label>
-      </div>
-      <input type="range" class="im_font_size" min="18" max="64" step="1" />
-
-      <div style="margin-top:10px">
-        <label>Line Spread</label>
-      </div>
-      <input type="range" class="im_spread" min="130" max="320" step="5" />
-      <small>Distance between beats while scrolling; larger values give big text more breathing room.</small>
-
-      <h4 style="margin-top:14px">Context Preview Count</h4>
-      <div>
-        <label>Both: <span class="im_preview_both_value">0</span></label>
-      </div>
-      <input type="range" class="im_preview_both" min="0" max="5" step="1" />
-      <div style="margin-top:8px">
-        <label>Ahead: <span class="im_preview_ahead_value">0</span></label>
-      </div>
-      <input type="range" class="im_preview_ahead" min="0" max="5" step="1" />
-      <div style="margin-top:8px">
-        <label>Behind: <span class="im_preview_behind_value">0</span></label>
-      </div>
-      <input type="range" class="im_preview_behind" min="0" max="5" step="1" />
-
-      <div class="inline-drawer" style="margin-top:14px">
-        <div class="inline-drawer-toggle inline-drawer-header">
-          <b>Mobile / Performance</b>
-          <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
-        </div>
+      <!-- ============ CONTENT & PARSING ============ -->
+      <div class="inline-drawer" style="margin-top:12px">
+        <div class="inline-drawer-toggle inline-drawer-header"><b>Content &amp; Parsing</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
         <div class="inline-drawer-content">
-          <div style="margin-top:6px">
-            <label>Mobile Performance Mode</label>
+          <div style="margin-top:6px"><label>Content Mode</label></div>
+          <select class="text_pole im_content_mode">
+            <option value="rp">RP mode (segregate quotes &amp; emphasis)</option>
+            <option value="general">General mode (plain text)</option>
+          </select>
+
+          <div style="margin-top:10px"><label>Extraction Mode</label></div>
+          <select class="text_pole im_extraction_mode">
+            <option value="sentence">Per sentence</option>
+            <option value="punctuation">Per punctuation</option>
+            <option value="balanced">Balanced blocks</option>
+          </select>
+
+          <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px">
+            <label class="checkbox_label"><input type="checkbox" class="im_split_big_blocks" /> Split big narration blocks</label>
+            <label class="checkbox_label"><input type="checkbox" class="im_prevent_code_html" /> Prevent stray HTML/code from being captured</label>
+            <label class="checkbox_label"><input type="checkbox" class="im_exclude_bracket_pipes" /> Ignore bracket choices like [a|b]</label>
           </div>
+
+          <div style="margin-top:10px"><label>Special Blocks <span style="opacity:.6">(experimental)</span></label></div>
+          <div style="display:flex; flex-direction:column; gap:8px">
+            <label class="checkbox_label"><input type="checkbox" class="im_special_code" /> Render code blocks as code cards</label>
+            <label class="checkbox_label"><input type="checkbox" class="im_special_html" /> Render HTML blocks as code cards</label>
+          </div>
+          <small>Pulls code/HTML out into their own fitted card beats. Works in both RP and General mode.</small>
+        </div>
+      </div>
+
+      <!-- ============ DISPLAY ============ -->
+      <div class="inline-drawer" style="margin-top:10px">
+        <div class="inline-drawer-toggle inline-drawer-header"><b>Display</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
+        <div class="inline-drawer-content">
+          <div style="margin-top:6px"><label>Display Mode</label></div>
+          <select class="text_pole im_display_mode">
+            <option value="spotlight">Spotlight</option>
+            <option value="teleprompter">Teleprompter</option>
+            <option value="rotary">Rotary</option>
+          </select>
+
+          <div style="margin-top:10px"><label>Text Position</label></div>
+          <select class="text_pole im_position">
+            <option value="center">Center</option>
+            <option value="top">Top</option>
+            <option value="bottom">Bottom</option>
+          </select>
+
+          <div style="margin-top:10px"><label>Glass Text Material</label></div>
+          <select class="text_pole im_material">
+            <option value="pearl">Pearl</option>
+            <option value="crystal">Crystal</option>
+            <option value="etched">Etched</option>
+            <option value="liquid">Liquid</option>
+          </select>
+
+          <div style="margin-top:10px"><label>Font Size</label></div>
+          <input type="range" class="im_font_size" min="18" max="64" step="1" />
+
+          <div style="margin-top:10px"><label>Line Spread</label></div>
+          <input type="range" class="im_spread" min="130" max="320" step="5" />
+          <small>Even breathing room between beats, independent of beat size.</small>
+
+          <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px">
+            <label class="checkbox_label"><input type="checkbox" class="im_context_preview" /> Show previous/next context ghosts</label>
+            <label class="checkbox_label"><input type="checkbox" class="im_show_progress" /> Show progress rail</label>
+            <label class="checkbox_label"><input type="checkbox" class="im_show_message_ids" /> Show subtle message IDs</label>
+            <label class="checkbox_label"><input type="checkbox" class="im_show_inmode_controls" /> Show in-mode reading controls</label>
+          </div>
+
+          <h4 style="margin-top:12px">Context Preview Count</h4>
+          <div><label>Both: <span class="im_preview_both_value">0</span></label></div>
+          <input type="range" class="im_preview_both" min="0" max="5" step="1" />
+          <div style="margin-top:6px"><label>Ahead: <span class="im_preview_ahead_value">0</span></label></div>
+          <input type="range" class="im_preview_ahead" min="0" max="5" step="1" />
+          <div style="margin-top:6px"><label>Behind: <span class="im_preview_behind_value">0</span></label></div>
+          <input type="range" class="im_preview_behind" min="0" max="5" step="1" />
+        </div>
+      </div>
+
+      <!-- ============ SCROLLING & MOTION ============ -->
+      <div class="inline-drawer" style="margin-top:10px">
+        <div class="inline-drawer-toggle inline-drawer-header"><b>Scrolling &amp; Motion</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
+        <div class="inline-drawer-content">
+          <div style="margin-top:6px"><label>Scroll Mode</label></div>
+          <select class="text_pole im_scroll_mode">
+            <option value="threshold">Threshold</option>
+            <option value="step">Single-step</option>
+          </select>
+
+          <div style="margin-top:10px"><label>Scroll Behavior</label></div>
+          <select class="text_pole im_scroll_behavior">
+            <option value="drag">Drag / free position</option>
+            <option value="swipe">Swipe / one beat per scroll</option>
+          </select>
+
+          <div style="margin-top:10px"><label>Scroll Feel</label></div>
+          <select class="text_pole im_scroll_feel">
+            <option value="natural">Natural Scroll</option>
+            <option value="glide">Glide Scroll</option>
+          </select>
+
+          <div style="margin-top:10px"><label>Scroll Weight</label></div>
+          <select class="text_pole im_weight">
+            <option value="heavy">Heavy</option>
+            <option value="silk">Silk</option>
+            <option value="fast">Fast</option>
+          </select>
+
+          <div style="margin-top:10px"><label>Threshold</label></div>
+          <input type="range" class="im_threshold" min="0.25" max="0.75" step="0.01" />
+          <small>How far you must scroll toward the next beat before it centers.</small>
+
+          <h4 style="margin-top:12px">Auto-scroll</h4>
+          <label class="checkbox_label"><input type="checkbox" class="im_auto_scroll" /> Enable auto-scroll on open</label>
+          <div style="margin-top:6px"><label>Speed: <span class="im_auto_scroll_speed_value">0.18</span></label></div>
+          <input type="range" class="im_auto_scroll_speed" min="0" max="1" step="0.01" />
+          <small>In immersive mode, tap the “auto” button to toggle, or press &amp; drag it left/right to set speed.</small>
+        </div>
+      </div>
+
+      <!-- ============ BEHAVIOR ============ -->
+      <div class="inline-drawer" style="margin-top:10px">
+        <div class="inline-drawer-toggle inline-drawer-header"><b>Behavior &amp; Exit</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
+        <div class="inline-drawer-content">
+          <div style="margin-top:6px; display:flex; flex-direction:column; gap:8px">
+            <label class="checkbox_label"><input type="checkbox" class="im_auto_open" /> Auto-open for new assistant messages</label>
+            <label class="checkbox_label"><input type="checkbox" class="im_stream_capture" /> Capture streaming assistant responses</label>
+            <label class="checkbox_label"><input type="checkbox" class="im_fade_on_end" /> Fade back to chat when the last beat finishes</label>
+            <label class="checkbox_label"><input type="checkbox" class="im_exit_at_end" /> Exit when pushing past the end</label>
+            <label class="checkbox_label"><input type="checkbox" class="im_exit_at_start" /> Exit when pushing before the start</label>
+            <label class="checkbox_label"><input type="checkbox" class="im_hide_st_chrome" /> Hide top bar and chat bar while immersive is open</label>
+            <label class="checkbox_label"><input type="checkbox" class="im_mobile_swipe" /> Mobile left/right swipe navigation</label>
+            <label class="checkbox_label"><input type="checkbox" class="im_show_button" /> Show immersive button on messages</label>
+            <label class="checkbox_label"><input type="checkbox" class="im_show_send_button" /> Show immersive button beside Send</label>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ MOBILE / PERFORMANCE ============ -->
+      <div class="inline-drawer" style="margin-top:10px">
+        <div class="inline-drawer-toggle inline-drawer-header"><b>Mobile / Performance</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
+        <div class="inline-drawer-content">
+          <div style="margin-top:6px"><label>Mobile Performance Mode</label></div>
           <select class="text_pole im_mobile_performance">
             <option value="auto">Auto (detect mobile/tablet)</option>
             <option value="on">Always on</option>
@@ -153,10 +167,6 @@
         </div>
       </div>
 
-      <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap">
-        <button class="menu_button im_open_now">Open latest assistant message</button>
-        <button class="menu_button im_close_now">Close immersive mode</button>
-      </div>
     </div>
   </div>
 </div>
