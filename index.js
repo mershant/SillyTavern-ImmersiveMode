@@ -15,6 +15,7 @@ const DEFAULT_SETTINGS = {
   showButton: true,
   scrollMode: 'threshold',
   scrollBehavior: 'drag',
+  scrollFeel: 'glide',
   extractionMode: 'sentence',
   displayMode: 'rotary',
   position: 'center',
@@ -70,6 +71,9 @@ let dragStartVisual = 0;
 let offset = 0;
 let transitionRaf = null;
 let dragRaf = null;
+let glideRaf = null;
+let glideVelocity = 0;
+let lastGlideTs = 0;
 let targetIndex = 0;
 let dragStartTargetIndex = 0;
 let streamingMessageId = null;
@@ -276,7 +280,7 @@ function renderLayer(layer, beatIndex, d) {
     const ghostTail = baseGhost * Math.exp(-dn / 1.35);
     opacity = Math.min(1, activeCurve + ghostTail);
   } else opacity = Math.exp(-Math.pow(dn / 0.40, 2));
-  const baseGap = Math.max(Number(settings.spread) || DEFAULT_SETTINGS.spread, (Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize) * 4.1);
+  const baseGap = Number(settings.spread) || DEFAULT_SETTINGS.spread;
   const y = d * baseGap;
   const scale = displayMode === 'teleprompter' ? 0.82 + 0.18 * Math.min(1, opacity * 3) : 0.9 + 0.1 * Math.min(1, opacity * 4);
   const rot = displayMode === 'rotary' ? ` rotateX(${clamp(d, -2, 2) * -34}deg)` : '';
@@ -355,6 +359,7 @@ function startSettle(toIndex) {
   if (toIndex >= beats.length && index >= beats.length && getSettings().fadeOnEnd) { fadeCloseImmersive(); return; }
   if (transitionRaf) cancelAnimationFrame(transitionRaf);
   if (dragRaf) { cancelAnimationFrame(dragRaf); dragRaf = null; }
+  if (glideRaf) { cancelAnimationFrame(glideRaf); glideRaf = null; glideVelocity = 0; }
   const from = visual;
   const to = toIndex;
   targetVisual = toIndex;
@@ -404,6 +409,30 @@ function smoothDragTo(nextTarget) {
   dragRaf = requestAnimationFrame(step);
 }
 
+function startGlide(delta) {
+  if (dragRaf) { cancelAnimationFrame(dragRaf); dragRaf = null; }
+  glideVelocity += delta * 0.18;
+  lastGlideTs = performance.now();
+  if (glideRaf) return;
+  const step = now => {
+    const dt = Math.min(2.2, Math.max(0.5, (now - lastGlideTs) / 16.67));
+    lastGlideTs = now;
+    visual = clamp(visual + glideVelocity * dt, 0, beats.length);
+    if (visual <= 0 || visual >= beats.length) glideVelocity = 0;
+    glideVelocity *= Math.pow(0.925, dt);
+    targetVisual = visual;
+    updateFromVisualPosition();
+    paint();
+    if (Math.abs(glideVelocity) < 0.0009) {
+      glideVelocity = 0;
+      glideRaf = null;
+      return;
+    }
+    glideRaf = requestAnimationFrame(step);
+  };
+  glideRaf = requestAnimationFrame(step);
+}
+
 function inputStarted() {
   if (transitionRaf) {
     cancelAnimationFrame(transitionRaf);
@@ -422,12 +451,14 @@ function attachMotionHandlers() {
       return;
     }
     inputStarted();
-    smoothDragTo(targetVisual + event.deltaY * getWeight().wheel);
+    const delta = event.deltaY * getWeight().wheel;
+    if (settings.scrollFeel === 'glide') startGlide(delta);
+    else smoothDragTo(targetVisual + delta);
   }, { passive: false });
-  stage.addEventListener('pointerdown', event => { dragging = true; inputStarted(); if (dragRaf) { cancelAnimationFrame(dragRaf); dragRaf = null; } dragStartX = event.clientX; dragStartY = event.clientY; dragStartVisual = visual; dragStartOffset = offset; stage.classList.add('drag'); stage.setPointerCapture(event.pointerId); });
+  stage.addEventListener('pointerdown', event => { dragging = true; inputStarted(); if (dragRaf) { cancelAnimationFrame(dragRaf); dragRaf = null; } if (glideRaf) { cancelAnimationFrame(glideRaf); glideRaf = null; glideVelocity = 0; } dragStartX = event.clientX; dragStartY = event.clientY; dragStartVisual = visual; dragStartOffset = offset; stage.classList.add('drag'); stage.setPointerCapture(event.pointerId); });
   stage.addEventListener('pointermove', event => {
     if (!dragging) return;
-    const stepSize = Math.max(Number(getSettings().spread) || DEFAULT_SETTINGS.spread, (Number(getSettings().fontSize) || DEFAULT_SETTINGS.fontSize) * 4.1);
+    const stepSize = Number(getSettings().spread) || DEFAULT_SETTINGS.spread;
     visual = clamp(dragStartVisual - (event.clientY - dragStartY) / stepSize, 0, beats.length);
     targetVisual = visual;
     updateFromVisualPosition();
@@ -467,21 +498,43 @@ async function addSettingsUi() {
   container.find('.im_position').val(settings.position).on('change', function () { settings.position = String($(this).val() || 'center'); saveSettings(); });
   container.find('.im_scroll_mode').val(settings.scrollMode).on('change', function () { settings.scrollMode = String($(this).val() || 'threshold'); saveSettings(); });
   container.find('.im_scroll_behavior').val(settings.scrollBehavior).on('change', function () { settings.scrollBehavior = String($(this).val() || 'drag'); saveSettings(); });
+  container.find('.im_scroll_feel').val(settings.scrollFeel).on('change', function () { settings.scrollFeel = String($(this).val() || 'glide'); saveSettings(); });
   container.find('.im_weight').val(settings.weight).on('change', function () { settings.weight = String($(this).val() || 'heavy'); saveSettings(); });
   container.find('.im_material').val(settings.material).on('change', function () { settings.material = String($(this).val() || 'pearl'); saveSettings(); applyOverlaySettings(); });
   container.find('.im_threshold').val(settings.threshold).on('input change', function () { settings.threshold = Number($(this).val()) || DEFAULT_SETTINGS.threshold; saveSettings(); });
   container.find('.im_font_size').val(settings.fontSize).on('input change', function () { settings.fontSize = Number($(this).val()) || DEFAULT_SETTINGS.fontSize; saveSettings(); applyOverlaySettings(); paint(); });
   container.find('.im_spread').val(settings.spread).on('input change', function () { settings.spread = Number($(this).val()) || DEFAULT_SETTINGS.spread; saveSettings(); paint(); });
-  container.find('.im_preview_both').val(Math.max(settings.previewAhead, settings.previewBehind)).on('input change', function () {
-    const value = Number($(this).val()) || 0;
-    settings.previewAhead = value;
-    settings.previewBehind = value;
-    container.find('.im_preview_ahead').val(value);
-    container.find('.im_preview_behind').val(value);
-    saveSettings(); paint();
-  });
-  container.find('.im_preview_ahead').val(settings.previewAhead).on('input change', function () { settings.previewAhead = Number($(this).val()) || 0; saveSettings(); paint(); });
-  container.find('.im_preview_behind').val(settings.previewBehind).on('input change', function () { settings.previewBehind = Number($(this).val()) || 0; saveSettings(); paint(); });
+  const updatePreviewValues = () => {
+    const current = getSettings();
+    container.find('.im_preview_both_value').text(String(Math.max(Number(current.previewAhead) || 0, Number(current.previewBehind) || 0)));
+    container.find('.im_preview_ahead_value').text(String(Number(current.previewAhead) || 0));
+    container.find('.im_preview_behind_value').text(String(Number(current.previewBehind) || 0));
+  };
+  container.find('.im_preview_both').val(Math.max(settings.previewAhead, settings.previewBehind));
+  container.find('.im_preview_ahead').val(settings.previewAhead);
+  container.find('.im_preview_behind').val(settings.previewBehind);
+  updatePreviewValues();
+  container.off('input.immersivePreview change.immersivePreview')
+    .on('input.immersivePreview change.immersivePreview', '.im_preview_both', function () {
+      const value = Number($(this).val()) || 0;
+      const current = getSettings();
+      current.previewAhead = value;
+      current.previewBehind = value;
+      container.find('.im_preview_ahead').val(value);
+      container.find('.im_preview_behind').val(value);
+      updatePreviewValues();
+      saveSettings(); paint();
+    })
+    .on('input.immersivePreview change.immersivePreview', '.im_preview_ahead', function () {
+      getSettings().previewAhead = Number($(this).val()) || 0;
+      updatePreviewValues();
+      saveSettings(); paint();
+    })
+    .on('input.immersivePreview change.immersivePreview', '.im_preview_behind', function () {
+      getSettings().previewBehind = Number($(this).val()) || 0;
+      updatePreviewValues();
+      saveSettings(); paint();
+    });
   container.find('.im_open_now').on('click', openLatestAssistant);
   container.find('.im_close_now').on('click', closeImmersive);
 }
