@@ -19,7 +19,7 @@ const DEFAULT_SETTINGS = {
   position: 'center',
   weight: 'heavy',
   material: 'pearl',
-  threshold: 0.46,
+  threshold: 0.32,
   fontSize: 38,
   spread: 220,
   fadeOnEnd: true,
@@ -40,9 +40,9 @@ const extensionName = (() => {
 })();
 
 const WEIGHTS = {
-  heavy: { wheel: 0.00042, threshold: 0.46, dur: 560 },
-  silk: { wheel: 0.00062, threshold: 0.42, dur: 480 },
-  fast: { wheel: 0.0009, threshold: 0.38, dur: 340 },
+  heavy: { wheel: 0.0032, threshold: 0.32, dur: 520 },
+  silk: { wheel: 0.0042, threshold: 0.38, dur: 440 },
+  fast: { wheel: 0.0058, threshold: 0.34, dur: 320 },
 };
 
 let initialized = false;
@@ -64,6 +64,8 @@ let dragStartY = 0;
 let dragStartOffset = 0;
 let offset = 0;
 let transitionRaf = null;
+let targetIndex = 0;
+let dragStartTargetIndex = 0;
 let streamingMessageId = null;
 let lastStreamingUpdate = 0;
 
@@ -74,10 +76,11 @@ function getSettings() {
     if (settings[key] === undefined) settings[key] = structuredClone(value);
   }
   settings.version = VERSION;
-  if ((settings.displayDefaultsVersion || 0) < 2) {
+  if ((settings.displayDefaultsVersion || 0) < 3) {
     settings.displayMode = 'rotary';
     settings.contextPreview = true;
-    settings.displayDefaultsVersion = 2;
+    if ((Number(settings.threshold) || 0) > 0.38) settings.threshold = 0.32;
+    settings.displayDefaultsVersion = 3;
   }
   return settings;
 }
@@ -218,7 +221,7 @@ function createOverlay() {
   attachMotionHandlers();
 }
 
-function resetMotion() { index = 0; visual = 0; offset = 0; dragging = false; }
+function resetMotion() { index = 0; targetIndex = 0; visual = 0; offset = 0; dragging = false; }
 function adjustFontSize(delta) { const settings = getSettings(); settings.fontSize = clamp((Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize) + delta, 18, 64); saveSettings(); applyOverlaySettings(); paint(); }
 
 function applyOverlaySettings() {
@@ -306,6 +309,7 @@ function updateStreamingMessage() {
   activeMessageId = Number(messageId);
   beats = nextBeats;
   index = clamp(index, 0, Math.max(0, beats.length - 1));
+  targetIndex = clamp(targetIndex, 0, Math.max(0, beats.length - 1));
   visual = clamp(visual, 0, Math.max(0, beats.length - 1));
   host.classList.remove('closing'); host.style.opacity = ''; host.style.transition = '';
   host.classList.add('open');
@@ -320,6 +324,7 @@ function closeImmersive() { fadeCloseImmersive(); }
 
 function startSettle(toIndex) {
   toIndex = clamp(toIndex, 0, beats.length);
+  targetIndex = toIndex;
   if (toIndex >= beats.length && index >= beats.length && getSettings().fadeOnEnd) { fadeCloseImmersive(); return; }
   if (transitionRaf) cancelAnimationFrame(transitionRaf);
   const from = visual;
@@ -331,22 +336,55 @@ function startSettle(toIndex) {
     visual = from + (to - from) * easeOutCubic(t);
     paint();
     if (t < 1) transitionRaf = requestAnimationFrame(step);
-    else { index = to; visual = to; offset = 0; transitionRaf = null; paint(); }
+    else { index = to; targetIndex = to; visual = to; offset = 0; transitionRaf = null; paint(); }
   }
   transitionRaf = requestAnimationFrame(step);
 }
 
-function thresholdResolve() { const threshold = Number(getSettings().threshold) || getWeight().threshold; if (offset >= threshold) startSettle(index + 1); else if (offset <= -threshold) startSettle(index - 1); }
+function thresholdResolve() {
+  const threshold = Number(getSettings().threshold) || getWeight().threshold;
+  const base = Math.round(clamp(visual, 0, beats.length));
+  if (offset >= threshold) startSettle(base + 1);
+  else if (offset <= -threshold) startSettle(base - 1);
+}
 function getWeight() { return WEIGHTS[getSettings().weight] || WEIGHTS.heavy; }
 
-function inputStarted() { if (transitionRaf) { cancelAnimationFrame(transitionRaf); transitionRaf = null; } }
+function inputStarted() {
+  if (transitionRaf) {
+    cancelAnimationFrame(transitionRaf);
+    transitionRaf = null;
+  }
+  // Preserve the actual on-screen position when user interrupts an animation.
+  index = Math.floor(clamp(visual, 0, Math.max(0, beats.length - 1)));
+  targetIndex = Math.round(clamp(visual, 0, beats.length));
+  offset = visual - index;
+}
 
 function attachMotionHandlers() {
-  stage.addEventListener('wheel', event => { event.preventDefault(); inputStarted(); const settings = getSettings(); if (settings.scrollMode === 'step') { startSettle(index + (event.deltaY > 0 ? 1 : -1)); return; } offset = clamp(offset + event.deltaY * getWeight().wheel * 0.45, -0.95, 0.95); visual = index + offset; paint(); clearTimeout(stage._imWheelTimer); stage._imWheelTimer = setTimeout(thresholdResolve, 120); }, { passive: false });
+  stage.addEventListener('wheel', event => {
+    event.preventDefault();
+    const settings = getSettings();
+    const direction = event.deltaY > 0 ? 1 : -1;
+    if (settings.scrollMode === 'step') { startSettle(targetIndex + direction); return; }
+    // If the user wheels again during a transition, chain from the pending target immediately.
+    if (transitionRaf && Math.abs(event.deltaY) > 18) { startSettle(targetIndex + direction); return; }
+    inputStarted();
+    offset = clamp(offset + event.deltaY * getWeight().wheel, -0.95, 0.95);
+    visual = index + offset;
+    paint();
+    clearTimeout(stage._imWheelTimer);
+    if (Math.abs(offset) >= (Number(settings.threshold) || getWeight().threshold)) {
+      const dir = offset > 0 ? 1 : -1;
+      offset = 0;
+      startSettle(targetIndex + dir);
+    } else {
+      stage._imWheelTimer = setTimeout(thresholdResolve, 120);
+    }
+  }, { passive: false });
   stage.addEventListener('pointerdown', event => { dragging = true; inputStarted(); dragStartX = event.clientX; dragStartY = event.clientY; dragStartOffset = offset; stage.classList.add('drag'); stage.setPointerCapture(event.pointerId); });
   stage.addEventListener('pointermove', event => { if (!dragging) return; const stepSize = Math.max(Number(getSettings().spread) || DEFAULT_SETTINGS.spread, (Number(getSettings().fontSize) || DEFAULT_SETTINGS.fontSize) * 4.1); offset = clamp(dragStartOffset - (event.clientY - dragStartY) / stepSize, -0.95, 0.95); visual = index + offset; paint(); });
-  stage.addEventListener('pointerup', event => { dragging = false; stage.classList.remove('drag'); const dx = event.clientX - dragStartX; const dy = event.clientY - dragStartY; if (getSettings().mobileSwipeNavigation && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.25) { offset = 0; startSettle(index + (dx < 0 ? 1 : -1)); return; } thresholdResolve(); });
-  document.addEventListener('keydown', event => { if (!host?.classList.contains('open')) return; if (['ArrowDown', 'ArrowRight', 'Space'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(index + 1); } if (['ArrowUp', 'ArrowLeft'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(index - 1); } if (event.code === 'Escape') { event.preventDefault(); event.stopPropagation(); closeImmersive(); } }, true);
+  stage.addEventListener('pointerup', event => { dragging = false; stage.classList.remove('drag'); const dx = event.clientX - dragStartX; const dy = event.clientY - dragStartY; if (getSettings().mobileSwipeNavigation && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.25) { offset = 0; startSettle(targetIndex + (dx < 0 ? 1 : -1)); return; } thresholdResolve(); });
+  document.addEventListener('keydown', event => { if (!host?.classList.contains('open')) return; if (['ArrowDown', 'ArrowRight', 'Space'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(targetIndex + 1); } if (['ArrowUp', 'ArrowLeft'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(targetIndex - 1); } if (event.code === 'Escape') { event.preventDefault(); event.stopPropagation(); closeImmersive(); } }, true);
 }
 
 function addMessageButton() { if ($('#message_template .mes_immersive_mode_button').length) return; const button = $('<div title="Open immersive reader" class="mes_button mes_immersive_mode_button fa-solid fa-book-open interactable" tabindex="0"></div>'); $('#message_template .mes_buttons .extraMesButtons').prepend(button); updateMessageButtonVisibility(); }
@@ -389,7 +427,7 @@ async function addSettingsUi() {
 
 function registerEvents() { eventSource.makeLast(event_types.CHARACTER_MESSAGE_RENDERED, (messageId, type) => { const message = chat[messageId]; if (!message || message.is_user || message.is_system) return; if (getSettings().autoOpen && ['normal', 'continue', 'swipe'].includes(type || 'normal')) openMessage(Number(messageId)); }); eventSource.on(event_types.STREAM_TOKEN_RECEIVED, updateStreamingMessage); eventSource.on(event_types.CHAT_CHANGED, closeImmersive); }
 function registerSlashCommand() { SlashCommandParser.addCommandObject(SlashCommand.fromProps({ name: 'immersive', callback: () => { openLatestAssistant(); return ''; }, helpString: 'Open Immersive Mode for the latest assistant message.' })); }
-function exposePublicApi() { globalThis.SillyTavernImmersiveMode = { openLatest: openLatestAssistant, openMessage, close: closeImmersive, debugOpenHtml(html, name = 'Seraphine') { createOverlay(); activeMessageId = -1; beats = buildBeatsFromMessage({ mes: String(html || ''), name, is_user: false, is_system: false }, 'debug'); resetMotion(); host.classList.remove('closing'); host.style.opacity = ''; host.style.transition = ''; host.classList.add('open'); document.body.classList.add('immersive-mode-active'); applyOverlaySettings(); paint(); }, getState() { return { activeMessageId, beats: beats.map(b => stripTags(b.html)), index, visual, open: host?.classList.contains('open') || false, renderedLayers: layers.length }; }, debugSegmentHtml(html) { return buildBeatsFromMessage({ mes: String(html || ''), name: 'debug', is_user: false, is_system: false }, 'debug').map(b => stripTags(b.html)); }, debugSetSettings(next) { Object.assign(getSettings(), next || {}); saveSettings(); if (host) applyOverlaySettings(); } }; }
+function exposePublicApi() { globalThis.SillyTavernImmersiveMode = { openLatest: openLatestAssistant, openMessage, close: closeImmersive, debugOpenHtml(html, name = 'Seraphine') { createOverlay(); activeMessageId = -1; beats = buildBeatsFromMessage({ mes: String(html || ''), name, is_user: false, is_system: false }, 'debug'); resetMotion(); host.classList.remove('closing'); host.style.opacity = ''; host.style.transition = ''; host.classList.add('open'); document.body.classList.add('immersive-mode-active'); applyOverlaySettings(); paint(); }, getState() { return { activeMessageId, beats: beats.map(b => stripTags(b.html)), index, targetIndex, visual, open: host?.classList.contains('open') || false, renderedLayers: layers.length }; }, debugSegmentHtml(html) { return buildBeatsFromMessage({ mes: String(html || ''), name: 'debug', is_user: false, is_system: false }, 'debug').map(b => stripTags(b.html)); }, debugSetSettings(next) { Object.assign(getSettings(), next || {}); saveSettings(); if (host) applyOverlaySettings(); } }; }
 
 async function init() { if (initialized) return; initialized = true; getSettings(); await addSettingsUi(); createOverlay(); addMessageButton(); addSendButton(); attachDelegatedHandlers(); registerEvents(); registerSlashCommand(); exposePublicApi(); console.log('[Immersive Mode] Loaded layered reader engine.'); }
 init().catch(error => { console.error('[Immersive Mode] Init failed:', error); toastr?.error?.(`Init failed: ${error?.message || error}`, 'Immersive Mode'); });
