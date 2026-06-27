@@ -4,7 +4,7 @@ import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 
 const EXTENSION_KEY = 'immersiveMode';
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 
 const DEFAULT_SETTINGS = {
   version: VERSION,
@@ -40,37 +40,30 @@ const extensionName = (() => {
 })();
 
 const WEIGHTS = {
-  heavy: { wheel: 0.00042, friction: 0.86, threshold: 0.46, dur: 680 },
-  silk: { wheel: 0.00062, friction: 0.82, threshold: 0.42, dur: 560 },
-  fast: { wheel: 0.0009, friction: 0.75, threshold: 0.38, dur: 420 },
+  heavy: { wheel: 0.00042, threshold: 0.46, dur: 560 },
+  silk: { wheel: 0.00062, threshold: 0.42, dur: 480 },
+  fast: { wheel: 0.0009, threshold: 0.38, dur: 340 },
 };
 
 let initialized = false;
-let overlay;
+let host;
+let root;
 let stage;
-let world;
+let layers = [];
 let fill;
 let meta;
-let closeButton;
+let fontRange;
+let chromeButton;
 let activeMessageId = null;
 let beats = [];
-let elements = [];
-let halfHeights = [];
-let beatCenters = [];
 let index = 0;
-let offset = 0;
-let velocity = 0;
-let settling = false;
-let settleFrom = 0;
-let settleTo = 0;
-let settleStart = 0;
-let settleDur = 520;
+let visual = 0;
 let dragging = false;
 let dragStartX = 0;
 let dragStartY = 0;
 let dragStartOffset = 0;
-let lastTs = performance.now();
-let rafStarted = false;
+let offset = 0;
+let transitionRaf = null;
 let streamingMessageId = null;
 let lastStreamingUpdate = 0;
 
@@ -91,21 +84,16 @@ function getSettings() {
 
 function saveSettings() { saveSettingsDebounced(); }
 function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
-function smoothstep(t) { t = clamp(t, 0, 1); return t * t * (3 - 2 * t); }
 function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
 function stripTags(html) { const div = document.createElement('div'); div.innerHTML = String(html || ''); return div.textContent || ''; }
-function escapeHtml(value) {
-  return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
-}
+function escapeHtml(value) { return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;'); }
 
 function normalizeMessageText(html) {
   const settings = getSettings();
   const div = document.createElement('div');
   div.innerHTML = String(html || '');
   div.querySelectorAll('script, style, .directional-roadway-panel, .mes_reasoning, .mes_reasoning_details').forEach(x => x.remove());
-  if (settings.preventCodeHtmlCapture) {
-    div.querySelectorAll('pre, code, kbd, samp').forEach(x => x.remove());
-  }
+  if (settings.preventCodeHtmlCapture) div.querySelectorAll('pre, code, kbd, samp').forEach(x => x.remove());
   div.querySelectorAll('br').forEach(x => x.replaceWith('\n'));
   div.querySelectorAll('strong, b').forEach(el => el.replaceWith(document.createTextNode(`==${el.textContent || ''}==`)));
   div.querySelectorAll('em, i').forEach(el => el.replaceWith(document.createTextNode(`*${el.textContent || ''}*`)));
@@ -121,9 +109,7 @@ function normalizeMessageText(html) {
       .replace(/\n{3,}/g, '\n\n')
       .trim();
   }
-  if (settings.excludeBracketPipes) {
-    text = text.replace(/\[[^\]\n]*\|[^\]\n]*\]/g, ' ').replace(/\s{2,}/g, ' ').trim();
-  }
+  if (settings.excludeBracketPipes) text = text.replace(/\[[^\]\n]*\|[^\]\n]*\]/g, ' ').replace(/\s{2,}/g, ' ').trim();
   return text;
 }
 
@@ -148,17 +134,12 @@ function splitLongPlain(text) {
   const out = [];
   for (const para of paraParts) {
     let sentences;
-    if (window.Intl && Intl.Segmenter) {
-      sentences = [...new Intl.Segmenter('en', { granularity: 'sentence' }).segment(para)].map(s => s.segment.trim()).filter(Boolean);
-    } else {
-      sentences = para.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
-    }
+    if (window.Intl && Intl.Segmenter) sentences = [...new Intl.Segmenter('en', { granularity: 'sentence' }).segment(para)].map(s => s.segment.trim()).filter(Boolean);
+    else sentences = para.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
     for (const sentence of (sentences.length ? sentences : [para])) {
-      if (sentenceMode) {
-        out.push(sentence);
-      } else if (sentence.length <= maxSentence) {
-        out.push(sentence);
-      } else {
+      if (sentenceMode) out.push(sentence);
+      else if (sentence.length <= maxSentence) out.push(sentence);
+      else {
         const clausePattern = punctuationMode ? /(?<=,|—|;|:)\s+/ : /(?<=—|;|:)\s+/;
         const clauses = sentence.split(clausePattern).map(x => x.trim()).filter(Boolean);
         out.push(...(clauses.length > 1 ? clauses : [sentence]));
@@ -171,7 +152,6 @@ function splitLongPlain(text) {
 function tokenizeIntoBeats(text) {
   const out = [];
   const src = String(text || '');
-  // Atomic regions: quoted dialogue and asterisk-emphasis thoughts/actions.
   const atomRe = /("[^"\n]*(?:\n[^"\n]*)?"|“[^”]*”|\*[^*]+\*)/g;
   let last = 0;
   let match;
@@ -183,9 +163,7 @@ function tokenizeIntoBeats(text) {
       const inner = atom.slice(1, -1).trim();
       if (inner.length <= (Number(getSettings().emphasisAtomicMax) || DEFAULT_SETTINGS.emphasisAtomicMax)) out.push(atom);
       else out.push(...splitLongPlain(inner).map(piece => `*${piece}*`));
-    } else {
-      out.push(atom);
-    }
+    } else out.push(atom);
     last = match.index + match[0].length;
   }
   const after = src.slice(last).trim();
@@ -193,144 +171,107 @@ function tokenizeIntoBeats(text) {
   return out.filter(Boolean);
 }
 
-function getMessageName(message) {
-  if (message?.name) return message.name;
-  return message?.is_user ? 'You' : 'Assistant';
-}
+function getMessageName(message) { if (message?.name) return message.name; return message?.is_user ? 'You' : 'Assistant'; }
 
 function buildBeatsFromMessage(message, messageId) {
   const settings = getSettings();
   const text = normalizeMessageText(message?.mes || '');
   const raw = settings.splitBigBlocks ? tokenizeIntoBeats(text) : [text];
-  return raw.filter(x => String(x).trim()).map((textBeat, i) => ({
-    html: renderBeatHtml(textBeat),
-    who: i === 0 ? getMessageName(message) : '',
-    id: i === 0 ? `#${messageId}` : '',
-  }));
+  return raw.filter(x => String(x).trim()).map((textBeat, i) => ({ html: renderBeatHtml(textBeat), who: i === 0 ? getMessageName(message) : '', id: i === 0 ? `#${messageId}` : '' }));
+}
+
+function shadowCss() {
+  return `
+    :host{all:initial;position:fixed;inset:48px 0 105px 0;z-index:99999;pointer-events:none;color:#f6f3eb;font-family:"Iowan Old Style","Palatino",Georgia,serif;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;}
+    :host(.open){display:block}:host(:not(.open)){display:none}:host(.hide-chrome){inset:0}
+    .stage{position:absolute;inset:0;overflow:hidden;perspective:1000px;pointer-events:auto;touch-action:none;user-select:none;cursor:grab}.stage.drag{cursor:grabbing}
+    .layer{position:absolute;top:50%;left:50%;width:min(750px,88vw);text-align:center;font-size:var(--im-font-size,38px);line-height:1.55;letter-spacing:.12px;transform-style:preserve-3d;will-change:transform,opacity;backface-visibility:hidden;text-wrap:balance;}
+    :host(.position-top) .layer{top:30%}:host(.position-center) .layer{top:50%}:host(.position-bottom) .layer{top:70%}
+    .who{display:block;font-family:system-ui,sans-serif;font-size:11px;letter-spacing:2.6px;text-transform:uppercase;color:#7e8796;margin-bottom:12px;font-weight:500}.txt{display:inline;text-wrap:balance}.pop{font-weight:650;color:#fff;-webkit-text-fill-color:#fff;background:linear-gradient(120deg,transparent,rgba(255,207,107,.52));background-size:100% 82%;background-repeat:no-repeat;background-position:0 64%;padding:0 .1em;border-radius:4px;text-shadow:0 0 18px rgba(255,207,107,.45)}
+    :host(.material-pearl) .txt{background:linear-gradient(180deg,#fff 0%,#e7edf7 55%,#aeb9ca 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;text-shadow:0 0 1px rgba(255,255,255,.7),0 0 10px rgba(230,240,255,.18),0 0 26px rgba(150,180,220,.12)}
+    :host(.material-crystal) .txt{background:linear-gradient(176deg,#fff 0%,#f5f9ff 42%,#cfd9eb 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;filter:drop-shadow(0 0 2px rgba(255,255,255,.55)) drop-shadow(0 0 16px rgba(170,205,255,.38))}
+    :host(.material-etched) .txt{color:rgba(246,243,235,.92);text-shadow:0 1px 0 rgba(255,255,255,.2),0 -1px 0 rgba(0,0,0,.6),0 0 14px rgba(210,225,255,.14)}
+    :host(.material-liquid) .txt{background:linear-gradient(90deg,#eaf6ff 0%,#fff 42%,#d8e8ff 70%,#fff2c6 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;filter:drop-shadow(0 0 3px rgba(255,255,255,.65)) drop-shadow(0 0 22px rgba(130,190,255,.42))}
+    .close,.pill{border:1px solid rgba(255,255,255,.08);background:rgba(10,12,18,.45);color:#9aa3b2;border-radius:999px;padding:7px 12px;font-family:system-ui,sans-serif;font-size:12px;cursor:pointer;backdrop-filter:blur(12px);pointer-events:auto}.close{position:absolute;top:14px;right:16px;z-index:3}.close:hover,.pill:hover,.pill.active{color:#fff;border-color:rgba(255,255,255,.18)}
+    .controls{position:absolute;left:50%;bottom:52px;transform:translateX(-50%);z-index:3;display:flex;align-items:center;gap:8px;font-family:system-ui,sans-serif;opacity:.72;transition:opacity 180ms ease;pointer-events:auto}.controls:hover{opacity:1}:host(:not(.show-controls)) .controls{display:none}.range{width:120px;accent-color:#ffcf6b;pointer-events:auto}
+    .hud{position:absolute;left:0;right:0;bottom:20px;z-index:2;display:flex;flex-direction:column;align-items:center;gap:8px;font-family:system-ui,sans-serif;pointer-events:none}:host(:not(.show-progress)) .hud{display:none}.rail{width:min(320px,46vw);height:2px;background:rgba(255,255,255,.06);border-radius:9px;overflow:hidden}.fill{height:100%;width:0;background:linear-gradient(90deg,rgba(180,205,255,.7),#ffcf6b)}.meta{font-size:10.5px;color:#5d6573;letter-spacing:1px}
+    @media (max-width:900px),(pointer:coarse){:host,:host(.hide-chrome){inset:0;min-height:100dvh}.stage{min-height:100dvh}.layer{width:min(86vw,560px);font-size:clamp(21px,5.7vw,34px);line-height:1.62;letter-spacing:.02px}:host(.position-top) .layer{top:24%}:host(.position-center) .layer{top:47%}:host(.position-bottom) .layer{top:65%}.close{top:calc(env(safe-area-inset-top,0px) + 10px);right:10px;padding:8px 12px}.controls{bottom:calc(env(safe-area-inset-bottom,0px) + 72px);width:min(88vw,380px);justify-content:center;gap:8px;opacity:.78}.pill{padding:8px 12px;font-size:12px;min-width:42px}.range{width:min(34vw,140px)}.hud{bottom:calc(env(safe-area-inset-bottom,0px) + 30px)}.rail{width:min(58vw,260px)}}
+    @media (max-width:420px){.layer{width:84vw;font-size:clamp(20px,5.45vw,30px);line-height:1.6}.controls{transform:translateX(-50%) scale(.9);bottom:calc(env(safe-area-inset-bottom,0px) + 76px)}}
+  `;
 }
 
 function createOverlay() {
-  if (overlay) return;
-  overlay = document.createElement('div');
-  overlay.className = 'im-overlay';
-  overlay.innerHTML = `
-    <button class="im-close" title="Close immersive mode">exit</button>
-    <div class="im-stage"><div class="im-world"></div></div>
-    <div class="im-controls">
-      <button class="im-control-pill im-font-down" title="Smaller text">A−</button>
-      <input class="im-control-range im-font-range" type="range" min="18" max="64" step="1" />
-      <button class="im-control-pill im-font-up" title="Larger text">A+</button>
-      <button class="im-control-pill im-toggle-chrome" title="Toggle top/chat bars">bars</button>
-    </div>
-    <div class="im-hud"><div class="im-rail"><div class="im-fill"></div></div><div class="im-meta">— / —</div></div>
-  `;
-  document.body.appendChild(overlay);
-  stage = overlay.querySelector('.im-stage');
-  world = overlay.querySelector('.im-world');
-  fill = overlay.querySelector('.im-fill');
-  meta = overlay.querySelector('.im-meta');
-  closeButton = overlay.querySelector('.im-close');
-  closeButton.addEventListener('click', closeImmersive);
-  overlay.querySelector('.im-font-range').addEventListener('input', event => {
-    const settings = getSettings();
-    settings.fontSize = Number(event.target.value) || DEFAULT_SETTINGS.fontSize;
-    saveSettings();
-    applyOverlaySettings();
-  });
-  overlay.querySelector('.im-font-down').addEventListener('click', () => adjustFontSize(-2));
-  overlay.querySelector('.im-font-up').addEventListener('click', () => adjustFontSize(2));
-  overlay.querySelector('.im-toggle-chrome').addEventListener('click', () => {
-    const settings = getSettings();
-    settings.hideStChrome = !settings.hideStChrome;
-    saveSettings();
-    applyOverlaySettings();
-  });
+  if (host) return;
+  host = document.createElement('div');
+  document.body.appendChild(host);
+  root = host.attachShadow({ mode: 'open' });
+  root.innerHTML = `<style>${shadowCss()}</style><button class="close">exit</button><div class="stage"><div class="layer" data-role="-1"></div><div class="layer" data-role="0"></div><div class="layer" data-role="1"></div></div><div class="controls"><button class="pill font-down">A−</button><input class="range font-range" type="range" min="18" max="64" step="1"><button class="pill font-up">A+</button><button class="pill toggle-chrome">bars</button></div><div class="hud"><div class="rail"><div class="fill"></div></div><div class="meta">— / —</div></div>`;
+  stage = root.querySelector('.stage');
+  layers = [...root.querySelectorAll('.layer')];
+  fill = root.querySelector('.fill');
+  meta = root.querySelector('.meta');
+  root.querySelector('.close').addEventListener('click', closeImmersive);
+  root.querySelector('.font-range').addEventListener('input', event => { const settings = getSettings(); settings.fontSize = Number(event.target.value) || DEFAULT_SETTINGS.fontSize; saveSettings(); applyOverlaySettings(); paint(); });
+  root.querySelector('.font-down').addEventListener('click', () => adjustFontSize(-2));
+  root.querySelector('.font-up').addEventListener('click', () => adjustFontSize(2));
+  root.querySelector('.toggle-chrome').addEventListener('click', () => { const settings = getSettings(); settings.hideStChrome = !settings.hideStChrome; saveSettings(); applyOverlaySettings(); });
   attachMotionHandlers();
 }
 
-function resetMotion() {
-  index = 0; offset = 0; velocity = 0; settling = false; dragging = false;
-}
-
-function recalculateBeatMetrics() {
-  halfHeights = elements.map(el => el.offsetHeight / 2);
-  const settings = getSettings();
-  const baseSpread = Number(settings.spread) || DEFAULT_SETTINGS.spread;
-  const gap = clamp(baseSpread * 0.35, 44, 120);
-  beatCenters = [];
-  let cursor = 0;
-  for (let i = 0; i < elements.length; i++) {
-    if (i === 0) {
-      beatCenters[i] = 0;
-      continue;
-    }
-    cursor += halfHeights[i - 1] + halfHeights[i] + gap;
-    beatCenters[i] = cursor;
-  }
-}
-
-function getLocalStep(direction = 1) {
-  if (direction >= 0 && index < beatCenters.length - 1) return Math.max(1, beatCenters[index + 1] - beatCenters[index]);
-  if (direction < 0 && index > 0) return Math.max(1, beatCenters[index] - beatCenters[index - 1]);
-  return Math.max(Number(getSettings().spread) || DEFAULT_SETTINGS.spread, (Number(getSettings().fontSize) || DEFAULT_SETTINGS.fontSize) * 4.3);
-}
-
-function centerForVisual(visual) {
-  if (!beatCenters.length) return 0;
-  const lo = Math.floor(clamp(visual, 0, beatCenters.length - 1));
-  const hi = Math.ceil(clamp(visual, 0, beatCenters.length - 1));
-  if (lo === hi) return beatCenters[lo] || 0;
-  const t = visual - lo;
-  return (beatCenters[lo] || 0) + ((beatCenters[hi] || 0) - (beatCenters[lo] || 0)) * t;
-}
-
-function adjustFontSize(delta) {
-  const settings = getSettings();
-  settings.fontSize = clamp((Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize) + delta, 18, 64);
-  saveSettings();
-  applyOverlaySettings();
-}
+function resetMotion() { index = 0; visual = 0; offset = 0; dragging = false; }
+function adjustFontSize(delta) { const settings = getSettings(); settings.fontSize = clamp((Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize) + delta, 18, 64); saveSettings(); applyOverlaySettings(); paint(); }
 
 function applyOverlaySettings() {
-  if (!overlay) return;
+  if (!host) return;
   const settings = getSettings();
-  overlay.classList.toggle('im-show-progress', !!settings.showProgress);
-  overlay.classList.toggle('im-show-controls', !!settings.showInModeControls);
-  overlay.classList.toggle('im-hide-chrome', !!settings.hideStChrome);
-  overlay.classList.remove('im-position-top', 'im-position-center', 'im-position-bottom');
-  overlay.classList.add(`im-position-${settings.position || 'center'}`);
-  overlay.classList.remove('im-material-pearl', 'im-material-crystal', 'im-material-etched', 'im-material-liquid');
-  overlay.classList.add(`im-material-${settings.material || 'pearl'}`);
-  overlay.style.setProperty('--im-font-size', `${Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize}px`);
-  overlay.querySelector('.im-font-range').value = Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize;
-  overlay.querySelector('.im-toggle-chrome').classList.toggle('im-active', !!settings.hideStChrome);
-  document.body.classList.toggle('im-hide-st-chrome', !!settings.hideStChrome && overlay.classList.contains('im-open'));
-  requestAnimationFrame(() => {
-    recalculateBeatMetrics();
-    paint();
-  });
+  host.classList.toggle('show-progress', !!settings.showProgress);
+  host.classList.toggle('show-controls', !!settings.showInModeControls);
+  host.classList.toggle('hide-chrome', !!settings.hideStChrome);
+  host.classList.remove('material-pearl', 'material-crystal', 'material-etched', 'material-liquid');
+  host.classList.add(`material-${settings.material || 'pearl'}`);
+  host.classList.remove('position-top', 'position-center', 'position-bottom');
+  host.classList.add(`position-${settings.position || 'center'}`);
+  host.style.setProperty('--im-font-size', `${Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize}px`);
+  root?.querySelector('.font-range') && (root.querySelector('.font-range').value = Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize);
+  root?.querySelector('.toggle-chrome')?.classList.toggle('active', !!settings.hideStChrome);
+  document.body.classList.toggle('im-hide-st-chrome', !!settings.hideStChrome && host.classList.contains('open'));
 }
 
-function renderBeats() {
-  world.innerHTML = '';
-  elements = [];
-  halfHeights = [];
+function renderLayer(layer, beatIndex, d) {
+  if (beatIndex < 0 || beatIndex >= beats.length) { layer.style.visibility = 'hidden'; layer.style.opacity = '0'; layer.innerHTML = ''; return; }
+  const beat = beats[beatIndex];
   const settings = getSettings();
-  applyOverlaySettings();
+  const who = beat.who ? `<span class="who">${escapeHtml(beat.who)}</span>` : '';
+  const id = settings.showMessageIds && beat.id ? `<span class="who">${escapeHtml(beat.id)}</span>` : '';
+  layer.innerHTML = `${who}<span class="txt">${beat.html}</span>${id}`;
+  const displayMode = settings.displayMode || 'rotary';
+  const contextPreview = !!settings.contextPreview || displayMode === 'teleprompter' || displayMode === 'rotary';
+  const dn = Math.abs(d);
+  let opacity;
+  if (contextPreview) {
+    const activeCurve = Math.exp(-Math.pow(dn / 0.48, 2));
+    const baseGhost = displayMode === 'spotlight' ? 0.12 : displayMode === 'rotary' ? 0.24 : 0.30;
+    const ghostTail = baseGhost * Math.exp(-dn / 1.35);
+    opacity = Math.min(1, activeCurve + ghostTail);
+  } else opacity = Math.exp(-Math.pow(dn / 0.40, 2));
+  const baseGap = Math.max(Number(settings.spread) || DEFAULT_SETTINGS.spread, (Number(settings.fontSize) || DEFAULT_SETTINGS.fontSize) * 4.1);
+  const y = d * baseGap;
+  const scale = displayMode === 'teleprompter' ? 0.82 + 0.18 * Math.min(1, opacity * 3) : 0.9 + 0.1 * Math.min(1, opacity * 4);
+  const rot = displayMode === 'rotary' ? ` rotateX(${clamp(d, -2, 2) * -34}deg)` : '';
+  layer.style.transform = `translate3d(-50%, calc(-50% + ${y.toFixed(2)}px), 0)${rot} scale(${scale.toFixed(3)})`;
+  layer.style.opacity = opacity.toFixed(3);
+  layer.style.filter = contextPreview && dn > 0.25 ? `blur(${Math.min(2.2, dn * 1.15).toFixed(2)}px)` : 'none';
+  layer.style.visibility = opacity < 0.002 ? 'hidden' : 'visible';
+}
 
-  beats.forEach((beat, i) => {
-    const el = document.createElement('div');
-    el.className = 'im-beat';
-    const who = beat.who ? `<span class="im-who">${escapeHtml(beat.who)}</span>` : '';
-    const id = settings.showMessageIds && beat.id ? `<span class="im-who">${escapeHtml(beat.id)}</span>` : '';
-    el.innerHTML = `${who}<span class="im-txt">${beat.html}</span>${id}`;
-    world.appendChild(el);
-    elements.push(el);
-  });
-  requestAnimationFrame(() => {
-    recalculateBeatMetrics();
-    paint();
-  });
+function paint() {
+  if (!host?.classList.contains('open') || !beats.length) return;
+  const center = Math.round(visual);
+  const roles = [-1, 0, 1];
+  roles.forEach((role, i) => renderLayer(layers[i], center + role, (center + role) - visual));
+  const progress = beats.length > 0 ? visual / beats.length : 0;
+  fill.style.width = `${clamp(progress, 0, 1) * 100}%`;
+  meta.textContent = index >= beats.length ? 'END' : `${Math.round(visual) + 1} / ${beats.length}`;
 }
 
 function openMessage(messageId) {
@@ -341,22 +282,14 @@ function openMessage(messageId) {
   beats = buildBeatsFromMessage(message, activeMessageId);
   if (!beats.length) return;
   resetMotion();
-  renderBeats();
-  overlay.classList.remove('im-closing');
-  overlay.style.opacity = '';
-  overlay.style.transition = '';
-  overlay.classList.add('im-open');
+  host.classList.remove('closing'); host.style.opacity = ''; host.style.transition = '';
+  host.classList.add('open');
   document.body.classList.add('immersive-mode-active');
   applyOverlaySettings();
-  if (!rafStarted) { rafStarted = true; requestAnimationFrame(loop); }
+  paint();
 }
 
-function openLatestAssistant() {
-  for (let i = chat.length - 1; i >= 0; i--) {
-    if (chat[i] && !chat[i].is_user && !chat[i].is_system) { openMessage(i); return; }
-  }
-  toastr?.warning?.('No assistant message found.', 'Immersive Mode');
-}
+function openLatestAssistant() { for (let i = chat.length - 1; i >= 0; i--) { if (chat[i] && !chat[i].is_user && !chat[i].is_system) { openMessage(i); return; } } toastr?.warning?.('No assistant message found.', 'Immersive Mode'); }
 
 function updateStreamingMessage() {
   const settings = getSettings();
@@ -373,336 +306,90 @@ function updateStreamingMessage() {
   activeMessageId = Number(messageId);
   beats = nextBeats;
   index = clamp(index, 0, Math.max(0, beats.length - 1));
-  renderBeats();
-  overlay.classList.remove('im-closing');
-  overlay.style.opacity = '';
-  overlay.style.transition = '';
-  overlay.classList.add('im-open');
+  visual = clamp(visual, 0, Math.max(0, beats.length - 1));
+  host.classList.remove('closing'); host.style.opacity = ''; host.style.transition = '';
+  host.classList.add('open');
   document.body.classList.add('immersive-mode-active');
   applyOverlaySettings();
-  if (!rafStarted) { rafStarted = true; requestAnimationFrame(loop); }
+  paint();
 }
 
-function finishCloseImmersive() {
-  overlay?.classList.remove('im-open', 'im-closing');
-  if (overlay) { overlay.style.opacity = ''; overlay.style.transition = ''; }
-  document.body.classList.remove('immersive-mode-active', 'im-hide-st-chrome');
-}
-
-function closeImmersive() {
-  fadeCloseImmersive();
-}
-
-function fadeCloseImmersive() {
-  if (!overlay?.classList.contains('im-open')) return;
-  if (overlay.classList.contains('im-closing')) return;
-  overlay.classList.add('im-closing');
-  overlay.style.transition = 'opacity 420ms ease';
-  overlay.style.opacity = '0';
-  setTimeout(finishCloseImmersive, 430);
-}
+function finishCloseImmersive() { host?.classList.remove('open', 'closing'); if (host) { host.style.opacity = ''; host.style.transition = ''; } document.body.classList.remove('immersive-mode-active', 'im-hide-st-chrome'); }
+function fadeCloseImmersive() { if (!host?.classList.contains('open') || host.classList.contains('closing')) return; host.classList.add('closing'); host.style.transition = 'opacity 420ms ease'; host.style.opacity = '0'; setTimeout(finishCloseImmersive, 430); }
+function closeImmersive() { fadeCloseImmersive(); }
 
 function startSettle(toIndex) {
-  // beats.length is a valid sentinel: the empty END state after the last beat.
   toIndex = clamp(toIndex, 0, beats.length);
-  const current = index + offset;
-  settleFrom = current;
-  settleTo = toIndex;
-  settleStart = performance.now();
-  settleDur = getWeight().dur;
-  settling = true;
-  velocity = 0;
-}
-
-function thresholdResolve() {
-  const settings = getSettings();
-  if (settings.scrollMode !== 'threshold') return;
-  const threshold = Number(settings.threshold) || getWeight().threshold;
-  // At empty END: another downward scroll exits back to chat.
-  if (index >= beats.length && offset >= threshold && settings.fadeOnEnd) {
-    fadeCloseImmersive();
-    return;
+  if (toIndex >= beats.length && index >= beats.length && getSettings().fadeOnEnd) { fadeCloseImmersive(); return; }
+  if (transitionRaf) cancelAnimationFrame(transitionRaf);
+  const from = visual;
+  const to = toIndex;
+  const start = performance.now();
+  const dur = getWeight().dur;
+  function step(now) {
+    const t = clamp((now - start) / dur, 0, 1);
+    visual = from + (to - from) * easeOutCubic(t);
+    paint();
+    if (t < 1) transitionRaf = requestAnimationFrame(step);
+    else { index = to; visual = to; offset = 0; transitionRaf = null; paint(); }
   }
-  if (offset >= threshold) startSettle(index + 1);
-  else if (offset <= -threshold) startSettle(index - 1);
+  transitionRaf = requestAnimationFrame(step);
 }
 
+function thresholdResolve() { const threshold = Number(getSettings().threshold) || getWeight().threshold; if (offset >= threshold) startSettle(index + 1); else if (offset <= -threshold) startSettle(index - 1); }
 function getWeight() { return WEIGHTS[getSettings().weight] || WEIGHTS.heavy; }
 
-function paint() {
-  if (!overlay?.classList.contains('im-open') || !elements.length) return;
-  const visual = index + offset;
-  const mid = overlay.clientHeight / 2;
-  const settings = getSettings();
-  const displayMode = settings.displayMode || 'spotlight';
-  const contextPreview = !!settings.contextPreview || displayMode === 'teleprompter' || displayMode === 'rotary';
-  const currentCenter = centerForVisual(visual);
-  elements.forEach((el, i) => {
-    const d = i - visual;
-    const y = mid + ((beatCenters[i] || 0) - currentCenter);
-    const dn = Math.abs(d);
-    const farLimit = contextPreview ? 3.0 : 1.35;
-    if (dn > farLimit) {
-      el.style.visibility = 'hidden';
-      el.style.opacity = '0';
-      el.style.filter = 'none';
-      return;
-    }
-
-    let opacity;
-    if (contextPreview) {
-      // Continuous curves: no hard switch between active and ghost states.
-      // This removes the blink/pop when previous/next text crosses the spotlight edge.
-      const activeCurve = Math.exp(-Math.pow(dn / 0.48, 2));
-      const baseGhost = displayMode === 'spotlight' ? 0.12 : displayMode === 'rotary' ? 0.24 : 0.30;
-      const ghostTail = baseGhost * Math.exp(-dn / 1.35);
-      opacity = Math.min(1, activeCurve + ghostTail);
-    } else {
-      opacity = Math.exp(-Math.pow(dn / 0.40, 2));
-    }
-
-    const scale = displayMode === 'teleprompter'
-      ? 0.82 + 0.18 * Math.min(1, opacity * 3)
-      : 0.9 + 0.1 * Math.min(1, opacity * 4);
-    const half = halfHeights[i] || 0;
-    const rot = displayMode === 'rotary' ? ` rotateX(${clamp(d, -2, 2) * -34}deg)` : '';
-    el.style.transform = `translate3d(0, ${(y - mid - half).toFixed(2)}px, 0)${rot} scale(${scale.toFixed(3)})`;
-    el.style.opacity = opacity.toFixed(3);
-    const blur = contextPreview && dn > 0.25 ? Math.min(2.2, dn * 1.15) : 0;
-    el.style.filter = blur > 0.03 ? `blur(${blur.toFixed(2)}px)` : 'none';
-    el.style.visibility = opacity < 0.002 ? 'hidden' : 'visible';
-  });
-  const progress = beats.length > 0 ? visual / beats.length : 0;
-  fill.style.width = `${clamp(progress, 0, 1) * 100}%`;
-  meta.textContent = index >= beats.length ? 'END' : `${Math.round(visual) + 1} / ${beats.length}`;
-}
-
-function loop(ts) {
-  const dt = Math.min(40, ts - lastTs);
-  lastTs = ts;
-  const frames = dt / 16.67;
-  if (overlay?.classList.contains('im-open')) {
-    if (settling) {
-      const t = clamp((ts - settleStart) / settleDur, 0, 1);
-      const cur = settleFrom + (settleTo - settleFrom) * easeOutCubic(t);
-      index = Math.floor(clamp(settleTo, 0, beats.length));
-      offset = cur - index;
-      if (t >= 1) {
-        index = settleTo; offset = 0; settling = false;
-      }
-    } else if (!dragging) {
-      offset += velocity * frames;
-      velocity *= Math.pow(getWeight().friction, frames);
-      offset = clamp(offset, -0.95, 0.95);
-      if (Math.abs(velocity) < 0.0008 && Math.abs(offset) > 0.001) thresholdResolve();
-    }
-    paint();
-  }
-  requestAnimationFrame(loop);
-}
-
-function inputStarted() { settling = false; }
+function inputStarted() { if (transitionRaf) { cancelAnimationFrame(transitionRaf); transitionRaf = null; } }
 
 function attachMotionHandlers() {
-  stage.addEventListener('wheel', event => {
-    event.preventDefault();
-    inputStarted();
-    const settings = getSettings();
-    if (settings.scrollMode === 'step') {
-      if (index >= beats.length && event.deltaY > 0 && settings.fadeOnEnd) fadeCloseImmersive();
-      else startSettle(index + (event.deltaY > 0 ? 1 : -1));
-      return;
-    }
-    const weight = getWeight();
-    velocity += event.deltaY * weight.wheel;
-    offset += event.deltaY * weight.wheel * 0.45;
-    offset = clamp(offset, -0.95, 0.95);
-    clearTimeout(stage._imWheelTimer);
-    stage._imWheelTimer = setTimeout(thresholdResolve, 120);
-  }, { passive: false });
-
-  stage.addEventListener('pointerdown', event => {
-    dragging = true;
-    inputStarted();
-    dragStartX = event.clientX;
-    dragStartY = event.clientY;
-    dragStartOffset = offset;
-    stage.classList.add('im-drag');
-    stage.setPointerCapture(event.pointerId);
-  });
-  stage.addEventListener('pointermove', event => {
-    if (!dragging) return;
-    const dragStep = getLocalStep(event.clientY < dragStartY ? 1 : -1);
-    offset = clamp(dragStartOffset - (event.clientY - dragStartY) / dragStep, -0.95, 0.95);
-    velocity = 0;
-  });
-  stage.addEventListener('pointerup', event => {
-    dragging = false;
-    stage.classList.remove('im-drag');
-    const dx = event.clientX - dragStartX;
-    const dy = event.clientY - dragStartY;
-    if (getSettings().mobileSwipeNavigation && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.25) {
-      offset = 0;
-      velocity = 0;
-      startSettle(index + (dx < 0 ? 1 : -1));
-      return;
-    }
-    thresholdResolve();
-  });
-
-  document.addEventListener('keydown', event => {
-    if (!overlay?.classList.contains('im-open')) return;
-    if (['ArrowDown', 'ArrowRight', 'Space'].includes(event.code)) {
-      event.preventDefault(); event.stopPropagation();
-      if (index >= beats.length && getSettings().fadeOnEnd) fadeCloseImmersive();
-      else startSettle(index + 1);
-    }
-    if (['ArrowUp', 'ArrowLeft'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(index - 1); }
-    if (event.code === 'Escape') { event.preventDefault(); event.stopPropagation(); closeImmersive(); }
-  }, true);
-
-  window.addEventListener('resize', () => {
-    if (!overlay?.classList.contains('im-open')) return;
-    requestAnimationFrame(() => {
-      recalculateBeatMetrics();
-      paint();
-    });
-  });
+  stage.addEventListener('wheel', event => { event.preventDefault(); inputStarted(); const settings = getSettings(); if (settings.scrollMode === 'step') { startSettle(index + (event.deltaY > 0 ? 1 : -1)); return; } offset = clamp(offset + event.deltaY * getWeight().wheel * 0.45, -0.95, 0.95); visual = index + offset; paint(); clearTimeout(stage._imWheelTimer); stage._imWheelTimer = setTimeout(thresholdResolve, 120); }, { passive: false });
+  stage.addEventListener('pointerdown', event => { dragging = true; inputStarted(); dragStartX = event.clientX; dragStartY = event.clientY; dragStartOffset = offset; stage.classList.add('drag'); stage.setPointerCapture(event.pointerId); });
+  stage.addEventListener('pointermove', event => { if (!dragging) return; const stepSize = Math.max(Number(getSettings().spread) || DEFAULT_SETTINGS.spread, (Number(getSettings().fontSize) || DEFAULT_SETTINGS.fontSize) * 4.1); offset = clamp(dragStartOffset - (event.clientY - dragStartY) / stepSize, -0.95, 0.95); visual = index + offset; paint(); });
+  stage.addEventListener('pointerup', event => { dragging = false; stage.classList.remove('drag'); const dx = event.clientX - dragStartX; const dy = event.clientY - dragStartY; if (getSettings().mobileSwipeNavigation && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.25) { offset = 0; startSettle(index + (dx < 0 ? 1 : -1)); return; } thresholdResolve(); });
+  document.addEventListener('keydown', event => { if (!host?.classList.contains('open')) return; if (['ArrowDown', 'ArrowRight', 'Space'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(index + 1); } if (['ArrowUp', 'ArrowLeft'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); startSettle(index - 1); } if (event.code === 'Escape') { event.preventDefault(); event.stopPropagation(); closeImmersive(); } }, true);
 }
 
-function addMessageButton() {
-  if ($('#message_template .mes_immersive_mode_button').length) return;
-  const button = $('<div title="Open immersive reader" class="mes_button mes_immersive_mode_button fa-solid fa-book-open interactable" tabindex="0"></div>');
-  $('#message_template .mes_buttons .extraMesButtons').prepend(button);
-  updateMessageButtonVisibility();
-}
-
-function addSendButton() {
-  if ($('#rightSendForm .im_send_immersive_button').length) return;
-  const button = $('<div title="Open immersive reader" class="fa-solid fa-book-open interactable im_send_immersive_button" tabindex="0"></div>');
-  $('#rightSendForm').prepend(button);
-  updateSendButtonVisibility();
-}
-
-function updateSendButtonVisibility() {
-  document.body.classList.toggle('im-send-button-hidden', !getSettings().showSendButton);
-}
-
-function updateMessageButtonVisibility() {
-  const visible = !!getSettings().showButton;
-  $('.mes_immersive_mode_button').toggle(visible);
-}
-
-function attachDelegatedHandlers() {
-  $(document).off('click.immersiveModeButton').on('click.immersiveModeButton', '.mes_immersive_mode_button', function () {
-    const messageId = Number($(this).closest('.mes').attr('mesid'));
-    openMessage(messageId);
-  });
-  $(document).off('click.immersiveModeSendButton').on('click.immersiveModeSendButton', '.im_send_immersive_button', function () {
-    openLatestAssistant();
-  });
-}
+function addMessageButton() { if ($('#message_template .mes_immersive_mode_button').length) return; const button = $('<div title="Open immersive reader" class="mes_button mes_immersive_mode_button fa-solid fa-book-open interactable" tabindex="0"></div>'); $('#message_template .mes_buttons .extraMesButtons').prepend(button); updateMessageButtonVisibility(); }
+function addSendButton() { if ($('#rightSendForm .im_send_immersive_button').length) return; const button = $('<div title="Open immersive reader" class="fa-solid fa-book-open interactable im_send_immersive_button" tabindex="0"></div>'); $('#rightSendForm').prepend(button); updateSendButtonVisibility(); }
+function updateSendButtonVisibility() { document.body.classList.toggle('im-send-button-hidden', !getSettings().showSendButton); }
+function updateMessageButtonVisibility() { $('.mes_immersive_mode_button').toggle(!!getSettings().showButton); }
+function attachDelegatedHandlers() { $(document).off('click.immersiveModeButton').on('click.immersiveModeButton', '.mes_immersive_mode_button', function () { openMessage(Number($(this).closest('.mes').attr('mesid'))); }); $(document).off('click.immersiveModeSendButton').on('click.immersiveModeSendButton', '.im_send_immersive_button', openLatestAssistant); }
 
 async function addSettingsUi() {
   const html = await renderExtensionTemplateAsync(extensionName, 'settings');
   $('#extensions_settings').append(html);
   const settings = getSettings();
   const container = $('.immersive_mode_settings');
-
   container.find('.im_auto_open').prop('checked', settings.autoOpen).on('change', function () { settings.autoOpen = !!$(this).prop('checked'); saveSettings(); });
   container.find('.im_split_big_blocks').prop('checked', settings.splitBigBlocks).on('change', function () { settings.splitBigBlocks = !!$(this).prop('checked'); saveSettings(); });
-  container.find('.im_show_progress').prop('checked', settings.showProgress).on('change', function () { settings.showProgress = !!$(this).prop('checked'); saveSettings(); if (overlay) renderBeats(); });
-  container.find('.im_show_message_ids').prop('checked', settings.showMessageIds).on('change', function () { settings.showMessageIds = !!$(this).prop('checked'); saveSettings(); if (overlay) renderBeats(); });
+  container.find('.im_show_progress').prop('checked', settings.showProgress).on('change', function () { settings.showProgress = !!$(this).prop('checked'); saveSettings(); applyOverlaySettings(); });
+  container.find('.im_show_message_ids').prop('checked', settings.showMessageIds).on('change', function () { settings.showMessageIds = !!$(this).prop('checked'); saveSettings(); paint(); });
   container.find('.im_show_button').prop('checked', settings.showButton).on('change', function () { settings.showButton = !!$(this).prop('checked'); saveSettings(); updateMessageButtonVisibility(); });
   container.find('.im_fade_on_end').prop('checked', settings.fadeOnEnd).on('change', function () { settings.fadeOnEnd = !!$(this).prop('checked'); saveSettings(); });
   container.find('.im_show_inmode_controls').prop('checked', settings.showInModeControls).on('change', function () { settings.showInModeControls = !!$(this).prop('checked'); saveSettings(); applyOverlaySettings(); });
   container.find('.im_hide_st_chrome').prop('checked', settings.hideStChrome).on('change', function () { settings.hideStChrome = !!$(this).prop('checked'); saveSettings(); applyOverlaySettings(); });
   container.find('.im_context_preview').prop('checked', settings.contextPreview).on('change', function () { settings.contextPreview = !!$(this).prop('checked'); saveSettings(); paint(); });
-  container.find('.im_prevent_code_html').prop('checked', settings.preventCodeHtmlCapture).on('change', function () { settings.preventCodeHtmlCapture = !!$(this).prop('checked'); saveSettings(); if (overlay && activeMessageId !== null) renderBeats(); });
-  container.find('.im_exclude_bracket_pipes').prop('checked', settings.excludeBracketPipes).on('change', function () { settings.excludeBracketPipes = !!$(this).prop('checked'); saveSettings(); if (overlay && activeMessageId !== null) renderBeats(); });
+  container.find('.im_prevent_code_html').prop('checked', settings.preventCodeHtmlCapture).on('change', function () { settings.preventCodeHtmlCapture = !!$(this).prop('checked'); saveSettings(); });
+  container.find('.im_exclude_bracket_pipes').prop('checked', settings.excludeBracketPipes).on('change', function () { settings.excludeBracketPipes = !!$(this).prop('checked'); saveSettings(); });
   container.find('.im_mobile_swipe').prop('checked', settings.mobileSwipeNavigation).on('change', function () { settings.mobileSwipeNavigation = !!$(this).prop('checked'); saveSettings(); });
   container.find('.im_stream_capture').prop('checked', settings.streamCapture).on('change', function () { settings.streamCapture = !!$(this).prop('checked'); saveSettings(); });
   container.find('.im_show_send_button').prop('checked', settings.showSendButton).on('change', function () { settings.showSendButton = !!$(this).prop('checked'); saveSettings(); updateSendButtonVisibility(); });
-  container.find('.im_extraction_mode').val(settings.extractionMode).on('change', function () { settings.extractionMode = String($(this).val() || 'sentence'); saveSettings(); if (overlay && activeMessageId !== null) renderBeats(); });
-  container.find('.im_display_mode').val(settings.displayMode).on('change', function () { settings.displayMode = String($(this).val() || 'spotlight'); saveSettings(); paint(); });
-  container.find('.im_position').val(settings.position).on('change', function () { settings.position = String($(this).val() || 'center'); saveSettings(); applyOverlaySettings(); });
+  container.find('.im_extraction_mode').val(settings.extractionMode).on('change', function () { settings.extractionMode = String($(this).val() || 'sentence'); saveSettings(); });
+  container.find('.im_display_mode').val(settings.displayMode).on('change', function () { settings.displayMode = String($(this).val() || 'rotary'); saveSettings(); paint(); });
+  container.find('.im_position').val(settings.position).on('change', function () { settings.position = String($(this).val() || 'center'); saveSettings(); });
   container.find('.im_scroll_mode').val(settings.scrollMode).on('change', function () { settings.scrollMode = String($(this).val() || 'threshold'); saveSettings(); });
   container.find('.im_weight').val(settings.weight).on('change', function () { settings.weight = String($(this).val() || 'heavy'); saveSettings(); });
-  container.find('.im_material').val(settings.material).on('change', function () { settings.material = String($(this).val() || 'pearl'); saveSettings(); if (overlay) renderBeats(); });
+  container.find('.im_material').val(settings.material).on('change', function () { settings.material = String($(this).val() || 'pearl'); saveSettings(); applyOverlaySettings(); });
   container.find('.im_threshold').val(settings.threshold).on('input change', function () { settings.threshold = Number($(this).val()) || DEFAULT_SETTINGS.threshold; saveSettings(); });
-  container.find('.im_font_size').val(settings.fontSize).on('input change', function () { settings.fontSize = Number($(this).val()) || DEFAULT_SETTINGS.fontSize; saveSettings(); applyOverlaySettings(); });
+  container.find('.im_font_size').val(settings.fontSize).on('input change', function () { settings.fontSize = Number($(this).val()) || DEFAULT_SETTINGS.fontSize; saveSettings(); applyOverlaySettings(); paint(); });
   container.find('.im_spread').val(settings.spread).on('input change', function () { settings.spread = Number($(this).val()) || DEFAULT_SETTINGS.spread; saveSettings(); paint(); });
   container.find('.im_open_now').on('click', openLatestAssistant);
   container.find('.im_close_now').on('click', closeImmersive);
 }
 
-function registerEvents() {
-  eventSource.makeLast(event_types.CHARACTER_MESSAGE_RENDERED, (messageId, type) => {
-    const message = chat[messageId];
-    if (!message || message.is_user || message.is_system) return;
-    if (getSettings().autoOpen && ['normal', 'continue', 'swipe'].includes(type || 'normal')) openMessage(Number(messageId));
-  });
-  eventSource.on(event_types.STREAM_TOKEN_RECEIVED, updateStreamingMessage);
-  eventSource.on(event_types.CHAT_CHANGED, closeImmersive);
-}
+function registerEvents() { eventSource.makeLast(event_types.CHARACTER_MESSAGE_RENDERED, (messageId, type) => { const message = chat[messageId]; if (!message || message.is_user || message.is_system) return; if (getSettings().autoOpen && ['normal', 'continue', 'swipe'].includes(type || 'normal')) openMessage(Number(messageId)); }); eventSource.on(event_types.STREAM_TOKEN_RECEIVED, updateStreamingMessage); eventSource.on(event_types.CHAT_CHANGED, closeImmersive); }
+function registerSlashCommand() { SlashCommandParser.addCommandObject(SlashCommand.fromProps({ name: 'immersive', callback: () => { openLatestAssistant(); return ''; }, helpString: 'Open Immersive Mode for the latest assistant message.' })); }
+function exposePublicApi() { globalThis.SillyTavernImmersiveMode = { openLatest: openLatestAssistant, openMessage, close: closeImmersive, debugOpenHtml(html, name = 'Seraphine') { createOverlay(); activeMessageId = -1; beats = buildBeatsFromMessage({ mes: String(html || ''), name, is_user: false, is_system: false }, 'debug'); resetMotion(); host.classList.remove('closing'); host.style.opacity = ''; host.style.transition = ''; host.classList.add('open'); document.body.classList.add('immersive-mode-active'); applyOverlaySettings(); paint(); }, getState() { return { activeMessageId, beats: beats.map(b => stripTags(b.html)), index, visual, open: host?.classList.contains('open') || false, renderedLayers: layers.length }; }, debugSegmentHtml(html) { return buildBeatsFromMessage({ mes: String(html || ''), name: 'debug', is_user: false, is_system: false }, 'debug').map(b => stripTags(b.html)); }, debugSetSettings(next) { Object.assign(getSettings(), next || {}); saveSettings(); if (host) applyOverlaySettings(); } }; }
 
-function registerSlashCommand() {
-  SlashCommandParser.addCommandObject(SlashCommand.fromProps({
-    name: 'immersive',
-    callback: () => { openLatestAssistant(); return ''; },
-    helpString: 'Open Immersive Mode for the latest assistant message.',
-  }));
-}
-
-function exposePublicApi() {
-  globalThis.SillyTavernImmersiveMode = {
-    openLatest: openLatestAssistant,
-    openMessage,
-    close: closeImmersive,
-    debugOpenHtml(html, name = 'Seraphine') {
-      createOverlay();
-      activeMessageId = -1;
-      beats = buildBeatsFromMessage({ mes: String(html || ''), name, is_user: false, is_system: false }, 'debug');
-      resetMotion();
-      renderBeats();
-      overlay.classList.remove('im-closing');
-      overlay.style.opacity = '';
-      overlay.style.transition = '';
-      overlay.classList.add('im-open');
-      document.body.classList.add('immersive-mode-active');
-      applyOverlaySettings();
-      if (!rafStarted) { rafStarted = true; requestAnimationFrame(loop); }
-    },
-    getState() {
-      return { activeMessageId, beats: beats.map(b => stripTags(b.html)), index, offset, open: overlay?.classList.contains('im-open') || false };
-    },
-    debugSegmentHtml(html) {
-      return buildBeatsFromMessage({ mes: String(html || ''), name: 'debug', is_user: false, is_system: false }, 'debug').map(b => stripTags(b.html));
-    },
-    debugSetSettings(next) {
-      Object.assign(getSettings(), next || {});
-      saveSettings();
-      if (overlay) applyOverlaySettings();
-    },
-  };
-}
-
-async function init() {
-  if (initialized) return;
-  initialized = true;
-  getSettings();
-  await addSettingsUi();
-  createOverlay();
-  addMessageButton();
-  addSendButton();
-  attachDelegatedHandlers();
-  registerEvents();
-  registerSlashCommand();
-  exposePublicApi();
-  console.log('[Immersive Mode] Loaded.');
-}
-
-init().catch(error => {
-  console.error('[Immersive Mode] Init failed:', error);
-  toastr?.error?.(`Init failed: ${error?.message || error}`, 'Immersive Mode');
-});
+async function init() { if (initialized) return; initialized = true; getSettings(); await addSettingsUi(); createOverlay(); addMessageButton(); addSendButton(); attachDelegatedHandlers(); registerEvents(); registerSlashCommand(); exposePublicApi(); console.log('[Immersive Mode] Loaded layered reader engine.'); }
+init().catch(error => { console.error('[Immersive Mode] Init failed:', error); toastr?.error?.(`Init failed: ${error?.message || error}`, 'Immersive Mode'); });
