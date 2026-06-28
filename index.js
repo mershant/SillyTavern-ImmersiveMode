@@ -44,6 +44,7 @@ const DEFAULT_SETTINGS = {
   skipDetailsBlocks: false,
   shrinkOversizedBeats: true,
   includeAsteriskSeparators: false,
+  italicAtomic: false,
   excludeBracketPipes: true,
   mobileSwipeNavigation: true,
   showSendButton: true,
@@ -271,8 +272,10 @@ function splitLongPlain(text) {
 function tokenizeIntoBeats(text) {
   const out = [];
   const src = String(text || '');
-  // Match atomic quoted dialogue / emphasized text. Inline HTML markers are attached below.
-  const atomRe = /("[^"\n]*(?:\n[^"\n]*)?"|“[^”]*”|\*[^*]+\*)/g;
+  // Match atomic quoted dialogue. Italic/action spans are atomic only when explicitly enabled.
+  const atomRe = getSettings().italicAtomic
+    ? /("[^"\n]*(?:\n[^"\n]*)?"|“[^”]*”|\*[^*]+\*)/g
+    : /("[^"\n]*(?:\n[^"\n]*)?"|“[^”]*”)/g;
   let last = 0;
   let match;
   while ((match = atomRe.exec(src))) {
@@ -1111,6 +1114,7 @@ async function addSettingsUi() {
   container.find('.im_skip_details_blocks').prop('checked', settings.skipDetailsBlocks).on('change', function () { settings.skipDetailsBlocks = !!$(this).prop('checked'); saveSettings(); if (host && activeMessageId !== null) remeasureAndPaint(); });
   container.find('.im_exclude_bracket_pipes').prop('checked', settings.excludeBracketPipes).on('change', function () { settings.excludeBracketPipes = !!$(this).prop('checked'); saveSettings(); });
   container.find('.im_include_asterisk_separators').prop('checked', settings.includeAsteriskSeparators).on('change', function () { settings.includeAsteriskSeparators = !!$(this).prop('checked'); saveSettings(); if (host && activeMessageId !== null) remeasureAndPaint(); });
+  container.find('.im_italic_atomic').prop('checked', settings.italicAtomic).on('change', function () { settings.italicAtomic = !!$(this).prop('checked'); saveSettings(); if (host && activeMessageId !== null) remeasureAndPaint(); });
   container.find('.im_mobile_swipe').prop('checked', settings.mobileSwipeNavigation).on('change', function () { settings.mobileSwipeNavigation = !!$(this).prop('checked'); saveSettings(); });
   container.find('.im_stream_capture').prop('checked', settings.streamCapture).on('change', function () { settings.streamCapture = !!$(this).prop('checked'); saveSettings(); });
   container.find('.im_show_send_button').prop('checked', settings.showSendButton).on('change', function () { settings.showSendButton = !!$(this).prop('checked'); saveSettings(); updateSendButtonVisibility(); });
