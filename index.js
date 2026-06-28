@@ -117,6 +117,8 @@ let targetIndex = 0;
 let dragStartTargetIndex = 0;
 let streamingMessageId = null;
 let lastStreamingUpdate = 0;
+let streamingUpdateTimer = null;
+let streamingPending = false;
 
 function getSettings() {
   extension_settings[EXTENSION_KEY] = extension_settings[EXTENSION_KEY] || {};
@@ -708,27 +710,43 @@ function openLatestAssistant() { for (let i = chat.length - 1; i >= 0; i--) { if
 function updateStreamingMessage() {
   const settings = getSettings();
   if (!settings.streamCapture) return;
-  const now = performance.now();
-  if (now - lastStreamingUpdate < 120) return;
-  lastStreamingUpdate = now;
   const messageId = chat.length - 1;
   const message = chat[messageId];
   if (!message || message.is_user || message.is_system) return;
-  const nextBeats = buildBeatsFromMessage(message, messageId);
-  if (!nextBeats.length) return;
-  createOverlay();
-  activeMessageId = Number(messageId);
-  beats = nextBeats;
-  index = clamp(index, 0, Math.max(0, beats.length - 1));
-  targetIndex = clamp(targetIndex, 0, Math.max(0, beats.length - 1));
-  visual = clamp(visual, 0, Math.max(0, beats.length - 1));
-  targetVisual = clamp(targetVisual, 0, Math.max(0, beats.length - 1));
-  host.classList.remove('closing'); host.style.opacity = ''; host.style.transition = '';
-  host.classList.add('open');
-  document.body.classList.add('immersive-mode-active');
-  applyOverlaySettings();
-  measureBeats();
-  paint();
+
+  const overlayOpen = !!host?.classList.contains('open');
+  const sameMessageOpen = overlayOpen && Number(activeMessageId) === Number(messageId);
+  // Streaming capture should NOT auto-open by itself. It only opens during streaming when autoOpen is enabled.
+  if (!sameMessageOpen && !settings.autoOpen) return;
+
+  streamingPending = true;
+  if (streamingUpdateTimer) return;
+  const delay = isPerfActive() || isMobileViewport() ? 360 : 180;
+  streamingUpdateTimer = setTimeout(() => {
+    streamingUpdateTimer = null;
+    if (!streamingPending) return;
+    streamingPending = false;
+    const now = performance.now();
+    if (now - lastStreamingUpdate < delay * 0.65) return;
+    lastStreamingUpdate = now;
+    const latestMessage = chat[messageId];
+    if (!latestMessage || latestMessage.is_user || latestMessage.is_system) return;
+    const nextBeats = buildBeatsFromMessage(latestMessage, messageId);
+    if (!nextBeats.length) return;
+    createOverlay();
+    activeMessageId = Number(messageId);
+    beats = nextBeats;
+    index = clamp(index, 0, Math.max(0, beats.length - 1));
+    targetIndex = clamp(targetIndex, 0, Math.max(0, beats.length - 1));
+    visual = clamp(visual, 0, Math.max(0, beats.length - 1));
+    targetVisual = clamp(targetVisual, 0, Math.max(0, beats.length - 1));
+    host.classList.remove('closing'); host.style.opacity = ''; host.style.transition = '';
+    host.classList.add('open');
+    document.body.classList.add('immersive-mode-active');
+    applyOverlaySettings();
+    measureBeats();
+    paint();
+  }, delay);
 }
 
 function finishCloseImmersive() { stopAutoScroll(); host?.classList.remove('open', 'closing'); if (host) { host.style.opacity = ''; host.style.transition = ''; } document.body.classList.remove('immersive-mode-active', 'im-hide-st-chrome'); }
@@ -1155,7 +1173,7 @@ async function addSettingsUi() {
 
 function registerEvents() { eventSource.makeLast(event_types.CHARACTER_MESSAGE_RENDERED, (messageId, type) => { const message = chat[messageId]; if (!message || message.is_user || message.is_system) return; if (getSettings().autoOpen && ['normal', 'continue', 'swipe'].includes(type || 'normal')) openMessage(Number(messageId)); }); eventSource.on(event_types.STREAM_TOKEN_RECEIVED, updateStreamingMessage); eventSource.on(event_types.CHAT_CHANGED, closeImmersive); }
 function registerSlashCommand() { SlashCommandParser.addCommandObject(SlashCommand.fromProps({ name: 'immersive', callback: () => { openLatestAssistant(); return ''; }, helpString: 'Open Immersive Mode for the latest assistant message.' })); }
-function exposePublicApi() { globalThis.SillyTavernImmersiveMode = { openLatest: openLatestAssistant, openMessage, close: closeImmersive, debugOpenHtml(html, name = 'Seraphine') { createOverlay(); activeMessageId = -1; beats = buildBeatsFromMessage({ mes: String(html || ''), name, is_user: false, is_system: false }, 'debug'); resetMotion(); host.classList.remove('closing'); host.style.opacity = ''; host.style.transition = ''; host.classList.add('open'); document.body.classList.add('immersive-mode-active'); applyOverlaySettings(); measureBeats(); paint(); }, getState() { return { activeMessageId, beats: beats.map(b => stripTags(b.html)), beatHtml: beats.map(b => b.html), index, targetIndex, visual, targetVisual, autoScroll: !!autoScrollRaf, autoScrollPaused, autoScrollCurrentSpeed, autoScrollResumeAt, dragSensitivity: getDragSensitivity(), open: host?.classList.contains('open') || false, renderedLayers: layers.length }; }, debugSegmentHtml(html) { return buildBeatsFromMessage({ mes: String(html || ''), name: 'debug', is_user: false, is_system: false }, 'debug').map(b => stripTags(b.html)); }, debugNormalizeHtml(html) { currentPreserved = []; const normalized = normalizeMessageText(String(html || ''), (getSettings().contentMode || 'rp') === 'general'); return { normalized, tokens: tokenizeIntoBeats(normalized), currentPreserved }; }, debugSetSettings(next) { Object.assign(getSettings(), next || {}); saveSettings(); if (host) applyOverlaySettings(); }, debugSetAuto(on) { setAutoScroll(!!on); } }; }
+function exposePublicApi() { globalThis.SillyTavernImmersiveMode = { openLatest: openLatestAssistant, openMessage, close: closeImmersive, debugOpenHtml(html, name = 'Seraphine') { createOverlay(); activeMessageId = -1; beats = buildBeatsFromMessage({ mes: String(html || ''), name, is_user: false, is_system: false }, 'debug'); resetMotion(); host.classList.remove('closing'); host.style.opacity = ''; host.style.transition = ''; host.classList.add('open'); document.body.classList.add('immersive-mode-active'); applyOverlaySettings(); measureBeats(); paint(); }, getState() { return { activeMessageId, beats: beats.map(b => stripTags(b.html)), beatHtml: beats.map(b => b.html), index, targetIndex, visual, targetVisual, autoScroll: !!autoScrollRaf, autoScrollPaused, autoScrollCurrentSpeed, autoScrollResumeAt, dragSensitivity: getDragSensitivity(), open: host?.classList.contains('open') || false, renderedLayers: layers.length }; }, debugSegmentHtml(html) { return buildBeatsFromMessage({ mes: String(html || ''), name: 'debug', is_user: false, is_system: false }, 'debug').map(b => stripTags(b.html)); }, debugNormalizeHtml(html) { currentPreserved = []; const normalized = normalizeMessageText(String(html || ''), (getSettings().contentMode || 'rp') === 'general'); return { normalized, tokens: tokenizeIntoBeats(normalized), currentPreserved }; }, debugSetSettings(next) { Object.assign(getSettings(), next || {}); saveSettings(); if (host) applyOverlaySettings(); }, debugSetAuto(on) { setAutoScroll(!!on); }, debugUpdateStreaming() { updateStreamingMessage(); } }; }
 
 async function init() { if (initialized) return; initialized = true; getSettings(); await addSettingsUi(); createOverlay(); addMessageButton(); addSendButton(); attachDelegatedHandlers(); registerEvents(); registerSlashCommand(); exposePublicApi(); console.log('[Immersive Mode] Loaded layered reader engine.'); }
 init().catch(error => { console.error('[Immersive Mode] Init failed:', error); toastr?.error?.(`Init failed: ${error?.message || error}`, 'Immersive Mode'); });
