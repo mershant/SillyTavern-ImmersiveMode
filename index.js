@@ -120,6 +120,7 @@ let streamingMessageId = null;
 let lastStreamingUpdate = 0;
 let streamingUpdateTimer = null;
 let streamingPending = false;
+let suppressedStreamingMessageId = null;
 
 function getSettings() {
   extension_settings[EXTENSION_KEY] = extension_settings[EXTENSION_KEY] || {};
@@ -212,6 +213,8 @@ function normalizeMessageText(html, generalMode) {
       .trim();
   }
   if (settings.excludeBracketPipes && !generalMode) text = text.replace(/\[[^\]\n]*\|[^\]\n]*\]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  // Drop empty/whitespace-only inline style wrappers; they should not become blank immersive text.
+  text = text.replace(/@@IM_OPEN_(\d+)@@\s*@@IM_CLOSE_\1@@/g, '').trim();
   // Inline HTML markers survive segmentation and are restored in renderBeatHtml.
   return text;
 }
@@ -434,7 +437,9 @@ function buildBeatsFromMessage(message, messageId) {
       if (b.block === 'html') return { html: renderHtmlBeat(b.html), who: '', id: i === 0 ? `#${messageId}` : '', isCode: true, isHtml: true };
       if (b.block === 'code') return { html: renderCodeBeatHtml(b.text, b.lang, b.block), who: '', id: i === 0 ? `#${messageId}` : '', isCode: true };
       return { html: renderBeatHtml(b.text), who: i === 0 ? getMessageName(message) : '', id: i === 0 ? `#${messageId}` : '', isCode: false };
-    });
+    })
+    .filter(b => b.isHtml || b.isCode || stripTags(b.html).trim())
+    .map((b, i) => ({ ...b, who: (!b.isCode && !b.isHtml && i === 0) ? getMessageName(message) : b.who, id: i === 0 ? `#${messageId}` : '' }));
 }
 
 function renderCodeBeatHtml(code, lang, kind) {
@@ -695,6 +700,7 @@ function openMessage(messageId) {
   // Hidden messages get is_system=true in SillyTavern; still allow opening them on explicit request.
   if (!message) return;
   activeMessageId = Number(messageId);
+  suppressedStreamingMessageId = null;
   createOverlay();
   beats = buildBeatsFromMessage(message, activeMessageId);
   if (!beats.length) { toastr?.info?.('Nothing to read in this message.', 'Immersive Mode'); return; }
@@ -714,6 +720,8 @@ function updateStreamingMessage() {
   const settings = getSettings();
   if (!settings.streamCapture) return;
   const messageId = chat.length - 1;
+  if (suppressedStreamingMessageId !== null && Number(messageId) !== Number(suppressedStreamingMessageId)) suppressedStreamingMessageId = null;
+  if (Number(messageId) === Number(suppressedStreamingMessageId)) return;
   const message = chat[messageId];
   if (!message || message.is_user || message.is_system) return;
 
@@ -754,7 +762,7 @@ function updateStreamingMessage() {
 
 function finishCloseImmersive() { stopAutoScroll(); host?.classList.remove('open', 'closing'); if (host) { host.style.opacity = ''; host.style.transition = ''; } document.body.classList.remove('immersive-mode-active', 'im-hide-st-chrome'); }
 function fadeCloseImmersive() { if (!host?.classList.contains('open') || host.classList.contains('closing')) return; host.classList.add('closing'); host.style.transition = 'opacity 420ms ease'; host.style.opacity = '0'; setTimeout(finishCloseImmersive, 430); }
-function closeImmersive() { fadeCloseImmersive(); }
+function closeImmersive() { if (activeMessageId !== null) suppressedStreamingMessageId = Number(activeMessageId); fadeCloseImmersive(); }
 
 function startSettle(toIndex) {
   // Barrier-based exit: if already parked at a boundary and pushing further, exit.
@@ -1071,14 +1079,13 @@ function attachMotionHandlers() {
     // Barrier-based exit: if this drag started while parked at a boundary and pushed further toward it, exit.
     if (dragStartParkedEnd && dy < -6 && atEndBoundary() && settings.exitAtEnd) { fadeCloseImmersive(); return; }
     if (dragStartParkedStart && dy > 6 && atStartBoundary() && settings.exitAtStart) { fadeCloseImmersive(); return; }
-    // Vertical release: fling with momentum (native-feeling), regardless of touch or mouse
-    if (settings.scrollBehavior === 'drag' && Math.abs(pointerVel) > 0.012) {
+    // Vertical release from direct dragging is always free-drag behavior, regardless of wheel scrollBehavior.
+    if (Math.abs(pointerVel) > 0.012) {
       flingWith(clamp(pointerVel, -0.9, 0.9));
       resumeAutoScrollSoon(320);
       return;
     }
-    if (settings.scrollBehavior !== 'drag') thresholdResolve();
-    else refreshParkState();
+    refreshParkState();
     resumeAutoScrollSoon(220);
   });
   document.addEventListener('keydown', event => { if (!host?.classList.contains('open')) return; if (['ArrowDown', 'ArrowRight', 'Space'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); inputStarted(); startSettle(targetIndex + 1); resumeAutoScrollSoon(260); } if (['ArrowUp', 'ArrowLeft'].includes(event.code)) { event.preventDefault(); event.stopPropagation(); inputStarted(); startSettle(targetIndex - 1); resumeAutoScrollSoon(260); } if (event.code === 'Escape') { event.preventDefault(); event.stopPropagation(); closeImmersive(); } }, true);
