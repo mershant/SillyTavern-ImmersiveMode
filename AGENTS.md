@@ -21,7 +21,8 @@ described in `README.md`; keep that file current when behavior changes.
   under the folder name `SillyTavern-ImmersiveMode`; the local clone uses a
   different name, so install-identity checks cover both.
 - Plain JavaScript, no build step: `index.js`, `style.css`, `settings.html`,
-  `manifest.json`.
+  `manifest.json`. `src/install-path.js` (from the kit starter) works out the
+  install folder at load time. Unit tests run with `npm test`.
 - Push only when the user asks.
 
 ## Development environment

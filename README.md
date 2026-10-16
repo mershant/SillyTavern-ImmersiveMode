@@ -526,25 +526,15 @@ In SillyTavern:
 
 ---
 
-## Development / local path
+## Development
 
-David's local development install path:
-
-```txt
-C:\Users\mershant\Projects\SillyTavern\data\default-user\extensions\SillyTavern-ImmersiveMode
-```
-
-Standalone GitHub repo path:
-
-```txt
-C:\Users\mershant\Projects\SillyTavern-ImmersiveMode
-```
-
-SillyTavern serves the extension at:
+The extension is plain JavaScript with no build step. SillyTavern serves it from its install folder, for example:
 
 ```txt
 /scripts/extensions/third-party/SillyTavern-ImmersiveMode/
 ```
+
+The code works out its own folder name at load time, so it keeps working if the folder is renamed.
 
 ---
 
@@ -553,7 +543,7 @@ SillyTavern serves the extension at:
 Before claiming a change works:
 
 ```bash
-npm run lint
+npm test
 ```
 
 Then verify in a real SillyTavern browser session:

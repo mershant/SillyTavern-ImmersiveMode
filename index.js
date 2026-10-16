@@ -1,4 +1,5 @@
 import { extension_settings, renderExtensionTemplateAsync } from '../../../extensions.js';
+import { extensionNameFromModuleUrl } from './src/install-path.js';
 import { chat, eventSource, event_types, saveSettingsDebounced } from '../../../../script.js';
 import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
@@ -52,10 +53,7 @@ const DEFAULT_SETTINGS = {
   emphasisAtomicMax: 140,
 };
 
-const extensionName = (() => {
-  const match = import.meta.url.match(/extensions\/(third-party\/[^/]+)\//);
-  return match ? match[1] : 'third-party/SillyTavern-ImmersiveMode';
-})();
+const extensionName = extensionNameFromModuleUrl(import.meta.url);
 
 const WEIGHTS = {
   heavy: { wheel: 0.0032, threshold: 0.32, dur: 520 },
