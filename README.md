@@ -75,7 +75,19 @@ You can navigate by:
 - mobile swipe,
 - auto-scroll.
 
-Direct pointer drag always acts as free-position drag, even if wheel behavior is set to swipe. This means dragging stays natural and continuous.
+Direct pointer drag always acts as free-position drag, whatever the wheel setting. This means dragging stays natural and continuous.
+
+The wheel and keys have three modes (**Motion → Wheel and keys**):
+
+- **Free scroll** (default) — glide and rest anywhere.
+- **Snap to the nearest line** — glide, then settle onto a line. The **Snap point** slider sets how far toward the next line you must scroll before it snaps forward instead of back.
+- **One line per notch** — each wheel notch or key press moves exactly one line.
+
+Quick key presses queue up: pressing ↓ three times fast moves three lines.
+
+### Edge bounce and exit
+
+At the first and last line the reader bounces softly and that screen edge lights up (see **Background and edges**). Closing works as before: reaching the edge stops you there (now with a bounce), and the next push past it closes. That next push counts even while the bounce is still settling. Either exit can be turned off.
 
 ### Auto-scroll
 
@@ -89,7 +101,8 @@ Auto-scroll behavior:
 - press and drag the auto button left/right to adjust speed,
 - manual scroll/drag **pauses** auto-scroll instead of turning it off,
 - after manual input, auto-scroll resumes smoothly,
-- speed ramps back in instead of snapping.
+- speed ramps back in instead of snapping,
+- with **Fade back to chat when auto-scroll finishes** on, the reader waits about 1.5 seconds on the last line and then fades back to chat. Reading by hand never closes on its own.
 
 ### Drag / wheel sensitivity
 
@@ -128,7 +141,45 @@ Available text materials:
 - Etched,
 - Liquid.
 
-These affect typography glow, fill, depth, and feel.
+These affect typography glow, fill, depth, and feel. Etched is the sharpest and the default.
+
+### Focus feedback
+
+- **Focus bloom** — the center line warms up as it reaches the center and cools as it leaves. It follows the motion, so a fast swipe gives a smooth shimmer, not separate flashes.
+- **Settle glow** — when scrolling stops, the line you landed on glows once, slowly.
+
+### Background and edges
+
+- **Background** — **Frosted glass** (default) blurs SillyTavern's page behind the reader, with a fine grain, like a frosted window over the chat. It works with SillyTavern's Fast UI mode on. **Dim only** just darkens the page. Performance mode always uses Dim only, since blurring the whole page is the most expensive effect.
+- **Edge at first and last line** — what lights up when you push past the first or last line. **Glass rim** (default) is a strip of glass along that screen edge that catches the light. **Soft glow** is a wide, soft pool of light with no line. Only the edge you pushed against lights up.
+
+### Ambient progress
+
+Two quiet effects show how far you are without adding anything to read:
+
+- **Edge trace** — a thin line of light starts at the top center and traces down both sides of the screen, meeting at the bottom when you reach the last line.
+- **Dawn** — a faint glow sinks from the top of the screen to the bottom and slowly warms from blue to amber as you read.
+
+Both drift behind your position on a soft spring rather than jumping, and both sit behind the text.
+
+More quiet touches, each with its own switch:
+
+- **Light sweep** — when you land on a line, one soft band of light crosses it once. It does not repeat while you stay on that line.
+- **Ink settle** — the arriving line sharpens from a hair of blur. Skipped while you fling past lines.
+- **Breathing** — after you rest on a line for a couple of seconds, its glow rises and falls very slowly until you move.
+- **Dialogue warmth** — the center warms slightly while the focused line is speech.
+- **Finish ring** — resting on the last line makes the edge trace glow once.
+- **Depth sway** — the background leans with your scroll and settles back, so the text seems to float above it.
+- **Trailing lines** — the lines before and after follow the focused line a beat late.
+- **Focus vignette** — the screen edges darken a little while you scroll fast, then relax.
+
+The **Balanced** preset (the default) turns on all of these except Dawn, Focus vignette and Dialogue warmth; see **Effects presets and cost**. Performance mode skips ink settle and trailing lines and drops the glows.
+
+### Message colors
+
+Messages often carry their own colors: the model writes `<font color>` or styled spans, or a preset's regex adds colored classes. The reader keeps those colors, including regex classes, because it reads the colors from the chat as shown.
+
+The reader draws on a dark surface, so a color picked for a light theme could vanish. Each color keeps its hue but is lightened until it is readable (at least 4.5:1 contrast). A colored passage that spans several lines stays colored on every line. Turn this off with **Keep message colors**.
 
 ### Context preview controls
 
@@ -140,7 +191,15 @@ You can show or hide previous/next context ghosts and control how many beats are
 
 ### Progress display
 
-Optional progress rail and subtle counter show where you are in the message.
+Optional progress rail and subtle counter show where you are in the message. Rail styles:
+
+- **Osmosis** — the lit dot is a drop of liquid that flows from dot to dot and stretches with speed.
+- **Liquid line** (default) — a filled line with a drop at its head that lags slightly and wobbles when you stop.
+- **Glass capsule** — a small glass lens slides along the rail and stretches when it moves fast.
+- **Ticks** — one dot per line, the current one lit.
+- **Plain line** — a thin filled line.
+
+Long messages share dots (up to 24), so the rail stays readable.
 
 ### In-mode controls
 
@@ -151,7 +210,7 @@ Small controls appear inside the overlay:
 - `▶ auto` auto-scroll toggle/speed control,
 - progress rail/counter.
 
-Controls can be hidden if you want a cleaner reading surface.
+Controls can be hidden if you want a cleaner reading surface. **Liquid glass buttons** gives them a glass look that squishes when pressed.
 
 ---
 
@@ -275,33 +334,23 @@ Default: **on**.
 
 ## HTML / regex card support
 
-Experimental special block handling can render HTML and regex output live.
-
-### Render HTML / regex output live
+HTML and regex output is shown as live cards inside the reader, so you never have to leave it to see a status panel, tracker, or styled block.
 
 Setting:
 
 ```txt
-Render HTML / regex output live (colors, cards)
+Show HTML and regex output as live cards
 ```
 
-Default: **off**.
+Default: **on**.
 
-When enabled:
+- regex-built blocks (`<details>`, tables, styled `<div>` cards, `<figure>`, `<blockquote>`) render live,
+- `<details>` cards open automatically,
+- the message's own `<style>` rules apply to its cards, the same way they apply in chat,
+- a card taller than the screen scrolls inside itself first: wheel, drag, or ↓ scrolls the card, and the reader moves on once the card's end is reached,
+- cards always stay between the top buttons and the bottom controls, whatever the text position.
 
-- inline `<font color="...">...</font>` is preserved,
-- colored spans are preserved,
-- regex-generated `<details>` cards can render as live cards,
-- `<details>` cards are auto-expanded inside Immersive Mode,
-- large cards are internally scrollable.
-
-Example supported inline HTML:
-
-```html
-<font color="#8FAE7B">"You're not screaming."</font>
-```
-
-This remains colored inside Immersive Mode.
+Message colors are kept whether or not cards are on (see **Message colors**).
 
 ### Skip rendered details cards
 
@@ -384,42 +433,36 @@ This is useful if you hide a message from the AI context but still want to view 
 
 ---
 
-## Mobile and performance mode
+## Performance
 
-Mobile reading is supported with viewport-safe sizing and touch controls.
+The reader only rebuilds a line's text when that line first comes into view; while you scroll it just moves what is already there. Line heights are remembered, so a streaming reply only measures the lines that changed. Effects only redraw when their value visibly changes, and every animation loop stops when the reader is still. For what each effect costs, see **Effects presets and cost**.
 
-Settings:
-
-```txt
-Mobile Performance Mode
-```
-
-Options:
-
-- Auto,
-- Always on,
-- Always off.
-
-Auto mode detects touch phones/tablets and avoids treating portrait desktop monitors as mobile.
-
-Performance mode reduces expensive effects like glow/blur/3D perspective for smoother scrolling.
+**Performance → Performance mode** (Auto / Always on / Always off) drops glow, blur, 3D tilt, and glass effects for smoother scrolling on slower devices. The liquid rails and glass buttons switch to simple versions. Auto turns it on for touch phones and tablets and leaves portrait desktop monitors alone.
 
 ---
 
-## Overflow handling
+### Effects presets and cost
 
-Long beats should not break the viewport.
+**Look & Feel → Effects preset** sets every visual effect at once:
 
-Immersive Mode uses a two-step fallback:
+| Preset | What it keeps | Measured cost |
+|---|---|---|
+| **Balanced** (recommended, default) | Everything except Dawn, Focus vignette and Dialogue warmth; Liquid line rail | +23% |
+| Light | Only the near-free effects: settle glow, sweep, ink settle, breathing, sway, trailing lines, glass, frosted background | +6% |
+| Full | Every effect | about +120% |
+| Minimal | Nothing but the edge bounce and a plain progress line | 0% |
 
-1. shrink oversized prose beats to fit,
-2. if still too large, make that beat internally scrollable.
+Every effect in the drawer shows its own cost tag, and a meter shows the total for your current mix. Changing any effect switches the preset to **Custom**; the meter then shows an estimate (marked `~`).
 
-Setting:
+Cost means how much longer each animation frame takes while scrolling, compared with every effect off. It was measured with `scripts/measure-effects.mjs` on a slow test server with no graphics card, where the browser draws everything in software. A normal PC or phone is much faster, so the numbers are for comparing effects, not a promise of frame rate. The most expensive single choices are the Liquid text material (+44%), Dawn (+18%), Focus vignette (+17%), Edge trace (+16%) and the Crystal text material (+16%). The numbers live in `src/effects.js`; re-run the script after changing an effect.
 
-```txt
-Shrink oversized prose beats to fit screen
-```
+## Fitting long lines and cards
+
+Nothing is cut off, whatever the text position (Top, Center, or Bottom):
+
+1. the focal line or card always stays between the top buttons and the bottom controls; near an edge the whole stack slides to keep it there,
+2. oversized prose lines shrink to fit (**Shrink oversized lines to fit the screen**),
+3. anything still too tall, such as a long card or code block, scrolls inside itself before the reader moves on.
 
 ---
 
@@ -427,8 +470,8 @@ Shrink oversized prose beats to fit screen
 
 ### Keyboard
 
-- `ArrowRight` / `ArrowDown` / `Space`: next beat
-- `ArrowLeft` / `ArrowUp`: previous beat
+- `ArrowDown` / `ArrowRight` / `Space` / `PageDown`: next line (or scroll inside a tall card)
+- `ArrowUp` / `ArrowLeft` / `PageUp`: previous line
 - `Escape`: close Immersive Mode
 
 ### Mouse / touch
@@ -450,61 +493,50 @@ Shrink oversized prose beats to fit screen
 
 ## Settings overview
 
-### Content & Parsing
+The drawer has six sections, most used first.
 
-- Content Mode
-- Extraction Mode
-- Split big narration blocks
-- Use SillyTavern rendered output
-- Skip rendered `<details>` cards
-- Prevent stray HTML/code capture
-- Ignore bracket choices like `[a|b]`
-- Include `***` separators as visible dividers
-- Split `*italic/action*` text into its own beat
-- Render code blocks as code cards
-- Render HTML / regex output live
+### Reading
 
-### Display
+- Display mode, Text position
+- Font size, Line spread
+- Show context lines before and after; Lines ahead, Lines behind
+- Shrink oversized lines to fit the screen
 
-- Display Mode
-- Text Position
-- Glass Text Material
-- Font Size
-- Line Spread
-- Show previous/next context ghosts
-- Shrink oversized prose beats to fit screen
-- Show progress rail
-- Show subtle message IDs
-- Show in-mode reading controls
-- Context preview counts
+### Look & Feel
 
-### Scrolling & Motion
+- Effects preset (Balanced / Light / Full / Minimal / Custom) with a cost meter
+- Text material, Background, Edge at first and last line, Progress rail style
+- Lines: Keep message colors, Focus bloom, Settle glow, Light sweep, Ink settle, Breathing, Dialogue warmth
+- Ambient: Edge trace, Dawn, Finish ring, Depth sway, Trailing lines, Focus vignette
+- Interface: Liquid glass buttons, Show progress rail, Show reading controls, Show message IDs
 
-- Scroll Mode
-- Scroll Behavior
-- Scroll Feel
-- Scroll Weight
-- Threshold
-- Drag / wheel sensitivity
-- Auto-scroll enable
-- Auto-scroll speed
+### Motion
 
-### Behavior & Exit
+- Wheel and keys: Free scroll / Snap to the nearest line / One line per notch
+- Snap point (shown for Snap only)
+- Scroll feel, Scroll weight, Drag / wheel sensitivity
+- Edge bounce
+- Auto-scroll on open, Speed, Fade back to chat when auto-scroll finishes
 
-- Auto-open for new assistant messages
-- Capture streaming assistant responses
-- Fade back to chat at the end
-- Exit when pushing past the end
-- Exit when pushing before the start
-- Hide top bar/chat bar while open
-- Mobile left/right swipe navigation
-- Show immersive button on messages
-- Show immersive button beside Send
+### Opening & Closing
 
-### Mobile / Performance
+- Open automatically for new replies, Follow replies while they stream
+- Close when pushing past the last line / before the first line
+- Hide SillyTavern's top bar and chat bar while reading
+- Swipe left or right to change lines (phones)
+- Reader button on messages / beside Send
 
-- Auto / Always on / Always off
-- Current performance status display
+### Text Splitting & Cards
+
+- Content mode, Split by
+- Cards: HTML and regex output, code blocks, skip `<details>`
+- Cleanup: read what the chat shows, split big narration, italic actions on their own line, `***` dividers, hide `[a|b]` choices, hide stray HTML/code
+
+### Performance
+
+- Performance mode: Auto / Always on / Always off, with current status
+
+Settings saved by older versions carry over. The old Scroll Mode and Scroll Behavior pair becomes one **Wheel and keys** setting: either one set to step/swipe becomes **One line per notch**, anything else **Free scroll**.
 
 ---
 
@@ -544,9 +576,10 @@ Before claiming a change works:
 
 ```bash
 npm test
+node scripts/live-acceptance.mjs   # after installing into the isolated test SillyTavern
 ```
 
-Then verify in a real SillyTavern browser session:
+`scripts/live-acceptance.mjs` drives the reader in a real browser at desktop and phone sizes (colors, scrolling, edge bounce and exit, cards, fitting, the drawer) and never sends a message to a model. Also check by hand:
 
 - extension loads,
 - console has no extension JS errors,
@@ -571,7 +604,7 @@ Next sentence.
 Expected:
 
 - no blank beat,
-- `green words` remains colored if HTML rendering is enabled,
+- `green words` stays colored (lightened if needed so it is readable),
 - no weird front/back spacing.
 
 ### Empty font

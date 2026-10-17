@@ -1,285 +1,120 @@
+/* The reader itself lives in a shadow root (see shadowCss() in index.js). This file only styles
+   SillyTavern's page around it and the settings drawer. */
+
 body.immersive-mode-active #chat {
   opacity: 0.16;
   transition: opacity 220ms ease;
 }
 
+/* Dims the page behind the reader. */
 body.immersive-mode-active::after {
   content: "";
   position: fixed;
   inset: 0;
   z-index: 99998;
   pointer-events: none;
-  background: rgba(0, 0, 0, 0.46);
-  backdrop-filter: blur(1.25px) saturate(0.9);
+  background: rgba(0, 0, 0, 0.5);
 }
+
+/* Frosted glass behind the reader. SillyTavern's own styles stop a blur layer laid over the
+   page from blurring anything (and its Fast UI mode removes backdrop blur everywhere), so the
+   page's own parts are blurred instead: the result looks like a frosted window over the chat.
+   Only while the reader is open; performance mode keeps the plain dim above. */
+body.immersive-mode-active.im-backdrop-frosted #bg1,
+body.immersive-mode-active.im-backdrop-frosted #bg_custom,
+body.immersive-mode-active.im-backdrop-frosted #sheld,
+body.immersive-mode-active.im-backdrop-frosted #top-bar,
+body.immersive-mode-active.im-backdrop-frosted #top-settings-holder,
+body.immersive-mode-active.im-backdrop-frosted #form_sheld {
+  filter: blur(18px) saturate(1.3) brightness(0.75) !important;
+  transition: filter 300ms ease;
+}
+
+body.immersive-mode-active.im-backdrop-frosted::after {
+  background:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='120' height='120' filter='url(%23n)' opacity='.08'/></svg>"),
+    rgba(0, 0, 0, 0.38);
+}
+
+/* The frosted chat is already blurred, so it does not also need to fade nearly out. */
+body.immersive-mode-active.im-backdrop-frosted #chat { opacity: 0.55; }
 
 body.immersive-mode-active.im-hide-st-chrome #top-bar,
 body.immersive-mode-active.im-hide-st-chrome #top-settings-holder,
 body.immersive-mode-active.im-hide-st-chrome #form_sheld {
   opacity: 0.08;
-  filter: blur(3px);
   pointer-events: none;
-  transition: opacity 220ms ease, filter 220ms ease;
+  transition: opacity 220ms ease;
 }
-
-.immersive_mode_settings small { opacity: 0.75; }
 
 .mes_immersive_mode_button,
 .im_send_immersive_button { color: inherit; }
 
 .im-send-button-hidden .im_send_immersive_button { display: none !important; }
 
-.im-overlay {
-  position: fixed;
-  inset: 48px 0 105px 0;
-  z-index: 99999;
-  background: transparent;
-  color: #f6f3eb;
-  overflow: hidden;
-  display: none;
-  pointer-events: none;
-  font-family: "Iowan Old Style", "Palatino", Georgia, serif;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-}
+/* ---------- Settings drawer ---------- */
 
-.im-overlay.im-open { display: block; }
-.im-overlay.im-hide-chrome { inset: 0; }
-
-.im-stage {
-  position: absolute;
-  inset: 0;
+.immersive_mode_settings .im-actions {
   display: flex;
-  justify-content: center;
-  perspective: 1000px;
-  overflow: hidden;
-  cursor: grab;
-  touch-action: none;
-  pointer-events: auto;
-  -webkit-user-select: none;
-  user-select: none;
-}
-
-.im-stage.im-drag { cursor: grabbing; }
-
-.im-world {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: min(750px, 88vw);
-  transform: translateX(-50%);
-  transform-style: preserve-3d;
-}
-
-.im-position-top .im-world { top: 28%; }
-.im-position-center .im-world { top: 50%; }
-.im-position-bottom .im-world { top: 70%; }
-
-.im-beat {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  text-align: center;
-  font-size: var(--im-font-size, 38px);
-  line-height: 1.55;
-  letter-spacing: .12px;
-  transform-origin: center center;
-  backface-visibility: hidden;
-  will-change: transform, opacity, filter;
-}
-
-.im-who {
-  display: block;
-  font-family: system-ui, sans-serif;
-  font-size: 11px;
-  letter-spacing: 2.6px;
-  text-transform: uppercase;
-  color: #7e8796;
-  margin-bottom: 12px;
-  font-weight: 500;
-}
-
-.im-txt { display: inline; text-wrap: balance; }
-
-.im-pop, .im-txt strong, .im-txt b {
-  font-weight: 650;
-  color: #fff;
-  -webkit-text-fill-color: #fff;
-  background: linear-gradient(120deg, transparent, rgba(255,207,107,.52));
-  background-size: 100% 82%;
-  background-repeat: no-repeat;
-  background-position: 0 64%;
-  padding: 0 .1em;
-  border-radius: 4px;
-  text-shadow: 0 0 18px rgba(255,207,107,.45);
-}
-
-.im-material-pearl .im-txt {
-  background: linear-gradient(180deg,#fff 0%,#e7edf7 55%,#aeb9ca 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
-  text-shadow: 0 0 1px rgba(255,255,255,.7), 0 0 10px rgba(230,240,255,.18), 0 0 26px rgba(150,180,220,.12);
-}
-
-.im-material-crystal .im-txt {
-  background: linear-gradient(176deg,#fff 0%,#f5f9ff 42%,#cfd9eb 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
-  filter: drop-shadow(0 0 2px rgba(255,255,255,.55)) drop-shadow(0 0 16px rgba(170,205,255,.38)) drop-shadow(0 0 40px rgba(120,160,255,.18));
-}
-
-.im-material-etched .im-txt {
-  color: rgba(246,243,235,.92);
-  text-shadow: 0 1px 0 rgba(255,255,255,.2), 0 -1px 0 rgba(0,0,0,.6), 0 0 14px rgba(210,225,255,.14);
-}
-
-.im-material-liquid .im-txt {
-  background: linear-gradient(90deg,#eaf6ff 0%,#fff 42%,#d8e8ff 70%,#fff2c6 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
-  filter: drop-shadow(0 0 3px rgba(255,255,255,.65)) drop-shadow(0 0 22px rgba(130,190,255,.42)) drop-shadow(0 0 54px rgba(255,207,107,.16));
-}
-
-.im-close,
-.im-control-pill {
-  border: 1px solid rgba(255,255,255,.08);
-  background: rgba(10,12,18,.45);
-  color: #9aa3b2;
-  border-radius: 999px;
-  padding: 7px 12px;
-  font-family: system-ui, sans-serif;
-  font-size: 12px;
-  cursor: pointer;
-  backdrop-filter: blur(12px);
-  pointer-events: auto;
-}
-
-.im-close { position: absolute; top: 14px; right: 16px; z-index: 2; }
-.im-close:hover, .im-control-pill:hover, .im-control-pill.im-active { color: #fff; border-color: rgba(255,255,255,.18); }
-
-.im-controls {
-  position: absolute;
-  left: 50%;
-  bottom: 52px;
-  transform: translateX(-50%);
-  z-index: 3;
-  display: flex;
-  align-items: center;
   gap: 8px;
-  font-family: system-ui, sans-serif;
-  opacity: .72;
-  transition: opacity 180ms ease;
-  pointer-events: auto;
+  flex-wrap: wrap;
+  margin: 6px 0 10px;
 }
-.im-controls:hover { opacity: 1; }
-.im-overlay:not(.im-show-controls) .im-controls { display: none; }
-.im-control-range { width: 120px; accent-color: #ffcf6b; pointer-events: auto; }
 
-.im-hud {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 20px;
-  z-index: 2;
+.immersive_mode_settings .im-section { margin-top: 6px; }
+
+/* SillyTavern shows and hides drawer content itself, so spacing uses margins, not display. */
+.immersive_mode_settings .im-section > .inline-drawer-content { padding: 6px 2px 10px; }
+.immersive_mode_settings .im-section > .inline-drawer-content > * + * { margin-top: 8px; }
+
+.immersive_mode_settings .im-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px 12px;
+}
+
+.immersive_mode_settings .im-field {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  font-family: system-ui, sans-serif;
-  pointer-events: none;
+  gap: 4px;
+  margin: 0;
 }
 
-.im-rail {
-  width: min(320px,46vw);
-  height: 2px;
-  background: rgba(255,255,255,.06);
-  border-radius: 9px;
-  overflow: hidden;
+.immersive_mode_settings .im-field > span { font-size: 0.95em; }
+.immersive_mode_settings .im-field select,
+.immersive_mode_settings .im-field input[type="range"] { width: 100%; margin: 0; }
+
+.immersive_mode_settings .checkbox_label { margin: 0; }
+
+.immersive_mode_settings .im-subhead {
+  margin: 8px 0 0;
+  font-size: 0.9em;
+  opacity: 0.8;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
-.im-fill { height: 100%; width: 0; background: linear-gradient(90deg,rgba(180,205,255,.7),#ffcf6b); }
-.im-meta { font-size: 10.5px; color: #5d6573; letter-spacing: 1px; }
-.im-overlay:not(.im-show-progress) .im-hud { display: none; }
+.immersive_mode_settings small { opacity: 0.75; line-height: 1.4; }
+.immersive_mode_settings .im-status { opacity: 0.7; font-size: 0.9em; }
 
-@media (max-width: 900px), (pointer: coarse) {
-  body.immersive-mode-active #chat { opacity: 0.025; }
-
-  .im-overlay,
-  .im-overlay.im-hide-chrome {
-    inset: 0;
-    min-height: 100dvh;
-  }
-
-  .im-stage {
-    inset: 0;
-    min-height: 100dvh;
-  }
-
-  .im-world {
-    width: min(86vw, 560px);
-  }
-
-  .im-position-top .im-world { top: 24%; }
-  .im-position-center .im-world { top: 47%; }
-  .im-position-bottom .im-world { top: 65%; }
-
-  .im-beat {
-    font-size: clamp(21px, 5.7vw, 34px);
-    line-height: 1.62;
-    letter-spacing: .02px;
-  }
-
-  .im-who {
-    font-size: 10px;
-    margin-bottom: 8px;
-    letter-spacing: 2px;
-  }
-
-  .im-close {
-    top: calc(env(safe-area-inset-top, 0px) + 10px);
-    right: 10px;
-    padding: 8px 12px;
-  }
-
-  .im-controls {
-    bottom: calc(env(safe-area-inset-bottom, 0px) + 72px);
-    width: min(88vw, 380px);
-    justify-content: center;
-    gap: 8px;
-    opacity: .78;
-  }
-
-  .im-control-pill {
-    padding: 8px 12px;
-    font-size: 12px;
-    min-width: 42px;
-  }
-
-  .im-control-range {
-    width: min(34vw, 140px);
-  }
-
-  .im-hud {
-    bottom: calc(env(safe-area-inset-bottom, 0px) + 30px);
-  }
-
-  .im-rail {
-    width: min(58vw, 260px);
-  }
+.immersive_mode_settings .im-cost-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 0.78em;
+  line-height: 1.6;
+  vertical-align: 1px;
+  border: 1px solid currentColor;
+  opacity: 0.85;
+  white-space: nowrap;
 }
+.immersive_mode_settings .im-cost-free { color: #8fbf8f; }
+.immersive_mode_settings .im-cost-light { color: #b6c48a; }
+.immersive_mode_settings .im-cost-medium { color: #e0b766; }
+.immersive_mode_settings .im-cost-heavy { color: #e48a72; }
 
-@media (max-width: 420px) {
-  .im-world { width: 84vw; }
-  .im-beat {
-    font-size: clamp(20px, 5.45vw, 30px);
-    line-height: 1.6;
-  }
-  .im-controls { transform: translateX(-50%) scale(.9); bottom: calc(env(safe-area-inset-bottom, 0px) + 76px); }
-}
+.immersive_mode_settings .im-cost-meter { display: flex; align-items: center; gap: 10px; }
+.immersive_mode_settings .im-cost-bar { flex: 1; height: 6px; border-radius: 6px; background: rgba(127, 127, 127, 0.25); overflow: hidden; }
+.immersive_mode_settings .im-cost-fill { height: 100%; width: 0; border-radius: 6px; background: linear-gradient(90deg, #8fbf8f, #e0b766 45%, #e48a72); background-size: 300px 100%; transition: width 200ms ease; }
+.immersive_mode_settings .im_cost_text { font-size: 0.9em; white-space: nowrap; }

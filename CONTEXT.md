@@ -29,6 +29,14 @@ reader actually reads every part, in order, without losing place.
 - **Special block** — code blocks and rendered HTML/regex cards (such as
   `<details>` cards), which can be shown as cards, skipped, or kept out of
   prose beats.
+- **Message colors** — colors a message carries (model-written tags or preset
+  regex classes). Kept in the reader, lightened only as far as needed to stay
+  readable on its dark surface; the hue is never changed.
+- **Safe area** — the band between the reader's top buttons and its bottom
+  controls. The focal beat always fits inside it; beats taller than it scroll
+  inside themselves.
+- **Edge bounce** — the visual push-back at a barrier. It is drawn separately
+  from the reading position, so it never delays the two-push exit.
 - **Barrier** — the stop at the start or end of a message. Once the reader is
   parked there, pushing further in the same direction exits back to chat.
 

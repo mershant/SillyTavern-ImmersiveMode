@@ -6,6 +6,6 @@
   "js": "index.js",
   "css": "style.css",
   "author": "mershant",
-  "version": "0.1.0",
-  "description": "Center-focal immersive reader for SillyTavern messages with threshold free-scroll, glass text materials, and quote-safe beat splitting."
+  "version": "0.3.0",
+  "description": "Focused reader for SillyTavern messages: one line at a time, with free glide scrolling, readable message colors, live HTML cards, and liquid progress rails."
 }

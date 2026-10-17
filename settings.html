@@ -6,173 +6,241 @@
     </div>
     <div class="inline-drawer-content">
 
-      <div style="margin-top:6px; display:flex; gap:8px; flex-wrap:wrap">
+      <div class="im-row im-actions">
         <button class="menu_button im_open_now">Open latest message</button>
         <button class="menu_button im_close_now">Close</button>
       </div>
 
-      <!-- ============ CONTENT & PARSING ============ -->
-      <div class="inline-drawer" style="margin-top:12px">
-        <div class="inline-drawer-toggle inline-drawer-header"><b>Content &amp; Parsing</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
+      <!-- ============ READING ============ -->
+      <div class="inline-drawer im-section">
+        <div class="inline-drawer-toggle inline-drawer-header"><b>Reading</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
         <div class="inline-drawer-content">
-          <div style="margin-top:6px"><label>Content Mode</label></div>
-          <select class="text_pole im_content_mode">
-            <option value="rp">RP mode (segregate quotes &amp; emphasis)</option>
-            <option value="general">General mode (plain text)</option>
-          </select>
-
-          <div style="margin-top:10px"><label>Extraction Mode</label></div>
-          <select class="text_pole im_extraction_mode">
-            <option value="sentence">Per sentence</option>
-            <option value="punctuation">Per punctuation</option>
-            <option value="balanced">Balanced blocks</option>
-          </select>
-
-          <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px">
-            <label class="checkbox_label"><input type="checkbox" class="im_split_big_blocks" /> Split big narration blocks</label>
-            <label class="checkbox_label"><input type="checkbox" class="im_use_rendered_html" /> Use SillyTavern's rendered output (honors regex &amp; markdown)</label>
-            <label class="checkbox_label"><input type="checkbox" class="im_skip_details_blocks" /> Skip rendered &lt;details&gt; cards instead of showing them</label>
-            <label class="checkbox_label"><input type="checkbox" class="im_prevent_code_html" /> Prevent stray HTML/code from being captured</label>
-            <label class="checkbox_label"><input type="checkbox" class="im_exclude_bracket_pipes" /> Ignore bracket choices like [a|b]</label>
-            <label class="checkbox_label"><input type="checkbox" class="im_include_asterisk_separators" /> Include *** separators as visible dividers</label>
-            <label class="checkbox_label"><input type="checkbox" class="im_italic_atomic" /> Split *italic/action* text into its own beat</label>
+          <div class="im-grid">
+            <label class="im-field"><span>Display mode</span>
+              <select class="text_pole im_display_mode">
+                <option value="rotary">Rotary</option>
+                <option value="teleprompter">Teleprompter</option>
+                <option value="spotlight">Spotlight</option>
+              </select>
+            </label>
+            <label class="im-field"><span>Text position</span>
+              <select class="text_pole im_position">
+                <option value="top">Top</option>
+                <option value="center">Center</option>
+                <option value="bottom">Bottom</option>
+              </select>
+            </label>
           </div>
 
-          <div style="margin-top:10px"><label>Special Blocks <span style="opacity:.6">(experimental)</span></label></div>
-          <div style="display:flex; flex-direction:column; gap:8px">
-            <label class="checkbox_label"><input type="checkbox" class="im_special_code" /> Render code blocks as code cards</label>
-            <label class="checkbox_label"><input type="checkbox" class="im_special_html" /> Render HTML / regex output live (colors, cards)</label>
+          <label class="im-field"><span>Font size: <b class="im_font_size_value">38</b>px</span>
+            <input type="range" class="im_font_size" min="18" max="64" step="1" />
+          </label>
+          <label class="im-field"><span>Line spread: <b class="im_spread_value">220</b></span>
+            <input type="range" class="im_spread" min="130" max="320" step="5" />
+          </label>
+
+          <label class="checkbox_label"><input type="checkbox" class="im_context_preview" /> Show context lines before and after</label>
+          <div class="im-grid">
+            <label class="im-field"><span>Lines ahead: <b class="im_preview_ahead_value">2</b></span>
+              <input type="range" class="im_preview_ahead" min="0" max="5" step="1" />
+            </label>
+            <label class="im-field"><span>Lines behind: <b class="im_preview_behind_value">2</b></span>
+              <input type="range" class="im_preview_behind" min="0" max="5" step="1" />
+            </label>
           </div>
-          <small>Default off. When a special block type is enabled, stray HTML/code prevention is skipped for that type so they do not conflict.</small>
+
+          <label class="checkbox_label"><input type="checkbox" class="im_shrink_oversized" /> Shrink oversized lines to fit the screen</label>
+          <small>Long lines and cards always stay clear of the buttons and the progress rail. Cards taller than the screen scroll inside themselves before the reader moves on.</small>
         </div>
       </div>
 
-      <!-- ============ DISPLAY ============ -->
-      <div class="inline-drawer" style="margin-top:10px">
-        <div class="inline-drawer-toggle inline-drawer-header"><b>Display</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
+      <!-- ============ LOOK & FEEL ============ -->
+      <div class="inline-drawer im-section">
+        <div class="inline-drawer-toggle inline-drawer-header"><b>Look &amp; Feel</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
         <div class="inline-drawer-content">
-          <div style="margin-top:6px"><label>Display Mode</label></div>
-          <select class="text_pole im_display_mode">
-            <option value="spotlight">Spotlight</option>
-            <option value="teleprompter">Teleprompter</option>
-            <option value="rotary">Rotary</option>
-          </select>
+          <label class="im-field"><span>Effects preset</span>
+            <select class="text_pole im_preset">
+              <option value="balanced">Balanced (recommended)</option>
+              <option value="light">Light</option>
+              <option value="full">Full</option>
+              <option value="minimal">Minimal</option>
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+          <small class="im_preset_note"></small>
+          <div class="im-cost-meter"><div class="im-cost-bar"><div class="im-cost-fill"></div></div><span class="im_cost_text"></span></div>
+          <small>Cost is how much longer each frame takes while scrolling, compared with every effect off. It was measured on a slow test server with no graphics card; a normal PC or phone runs faster, so use the numbers to compare effects. Performance mode turns the costly ones off for you.</small>
 
-          <div style="margin-top:10px"><label>Text Position</label></div>
-          <select class="text_pole im_position">
-            <option value="center">Center</option>
-            <option value="top">Top</option>
-            <option value="bottom">Bottom</option>
-          </select>
-
-          <div style="margin-top:10px"><label>Glass Text Material</label></div>
-          <select class="text_pole im_material">
-            <option value="pearl">Pearl</option>
-            <option value="crystal">Crystal</option>
-            <option value="etched">Etched</option>
-            <option value="liquid">Liquid</option>
-          </select>
-
-          <div style="margin-top:10px"><label>Font Size</label></div>
-          <input type="range" class="im_font_size" min="18" max="64" step="1" />
-
-          <div style="margin-top:10px"><label>Line Spread</label></div>
-          <input type="range" class="im_spread" min="130" max="320" step="5" />
-          <small>Even breathing room between beats, independent of beat size.</small>
-
-          <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px">
-            <label class="checkbox_label"><input type="checkbox" class="im_context_preview" /> Show previous/next context ghosts</label>
-            <label class="checkbox_label"><input type="checkbox" class="im_shrink_oversized" /> Shrink oversized prose beats to fit screen</label>
-            <label class="checkbox_label"><input type="checkbox" class="im_show_progress" /> Show progress rail</label>
-            <label class="checkbox_label"><input type="checkbox" class="im_show_message_ids" /> Show subtle message IDs</label>
-            <label class="checkbox_label"><input type="checkbox" class="im_show_inmode_controls" /> Show in-mode reading controls</label>
+          <div class="im-grid">
+            <label class="im-field"><span>Text material</span>
+              <select class="text_pole im_material">
+                <option value="etched">Etched (sharpest)</option>
+                <option value="pearl">Pearl</option>
+                <option value="crystal">Crystal</option>
+                <option value="liquid">Liquid</option>
+              </select>
+            </label>
+            <label class="im-field"><span>Background</span>
+              <select class="text_pole im_backdrop">
+                <option value="frosted">Frosted glass</option>
+                <option value="dim">Dim only</option>
+              </select>
+            </label>
+            <label class="im-field"><span>Edge at first and last line</span>
+              <select class="text_pole im_edge_style">
+                <option value="rim">Glass rim</option>
+                <option value="glow">Soft glow</option>
+              </select>
+            </label>
+            <label class="im-field"><span>Progress rail</span>
+              <select class="text_pole im_rail_style">
+                <option value="osmosis">Osmosis</option>
+                <option value="liquid">Liquid line</option>
+                <option value="capsule">Glass capsule</option>
+                <option value="ticks">Ticks</option>
+                <option value="line">Plain line</option>
+              </select>
+            </label>
           </div>
 
-          <h4 style="margin-top:12px">Context Preview Count</h4>
-          <div><label>Both: <span class="im_preview_both_value">0</span></label></div>
-          <input type="range" class="im_preview_both" min="0" max="5" step="1" />
-          <div style="margin-top:6px"><label>Ahead: <span class="im_preview_ahead_value">0</span></label></div>
-          <input type="range" class="im_preview_ahead" min="0" max="5" step="1" />
-          <div style="margin-top:6px"><label>Behind: <span class="im_preview_behind_value">0</span></label></div>
-          <input type="range" class="im_preview_behind" min="0" max="5" step="1" />
+          <h4 class="im-subhead">Lines</h4>
+          <label class="checkbox_label"><input type="checkbox" class="im_keep_colors" /> Keep message colors (adjusted so they stay readable)</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_focus_bloom" /> Focus bloom (the center line warms up as it arrives)</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_settle_glow" /> Settle glow (the line glows once when scrolling stops)</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_light_sweep" /> Light sweep (a soft band of light crosses each line you land on)</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_ink_settle" /> Ink settle (a landing line sharpens into focus)</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_breathing" /> Breathing (a line you rest on glows very slowly)</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_dialogue_warmth" /> Dialogue warmth (the center warms while someone speaks)</label>
+
+          <h4 class="im-subhead">Ambient</h4>
+          <label class="checkbox_label"><input type="checkbox" class="im_edge_trace" /> Edge trace (a thin light traces the screen edge as you read)</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_dawn_glow" /> Dawn (the background glow sinks and warms as you read)</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_finish_ring" /> Finish ring (the edge trace glows once on the last line)</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_depth_sway" /> Depth sway (the background leans with your scroll)</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_trailing_lines" /> Trailing lines (nearby lines follow a beat late)</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_focus_vignette" /> Focus vignette (edges darken a little while scrolling fast)</label>
+
+          <h4 class="im-subhead">Interface</h4>
+          <label class="checkbox_label"><input type="checkbox" class="im_glass_buttons" /> Liquid glass buttons</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_show_progress" /> Show progress rail</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_show_inmode_controls" /> Show reading controls (A−, A+, auto)</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_show_message_ids" /> Show message IDs</label>
         </div>
       </div>
 
-      <!-- ============ SCROLLING & MOTION ============ -->
-      <div class="inline-drawer" style="margin-top:10px">
-        <div class="inline-drawer-toggle inline-drawer-header"><b>Scrolling &amp; Motion</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
+      <!-- ============ MOTION ============ -->
+      <div class="inline-drawer im-section">
+        <div class="inline-drawer-toggle inline-drawer-header"><b>Motion</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
         <div class="inline-drawer-content">
-          <div style="margin-top:6px"><label>Scroll Mode</label></div>
-          <select class="text_pole im_scroll_mode">
-            <option value="threshold">Threshold</option>
-            <option value="step">Single-step</option>
-          </select>
+          <label class="im-field"><span>Wheel and keys</span>
+            <select class="text_pole im_scroll_mode">
+              <option value="free">Free scroll (rest anywhere)</option>
+              <option value="snap">Snap to the nearest line</option>
+              <option value="step">One line per notch</option>
+            </select>
+          </label>
+          <label class="im-field im_threshold_row"><span>Snap point: <b class="im_threshold_value">0.32</b></span>
+            <input type="range" class="im_threshold" min="0.10" max="0.75" step="0.01" />
+            <small>How far toward the next line you must scroll before it snaps forward instead of back.</small>
+          </label>
 
-          <div style="margin-top:10px"><label>Scroll Behavior</label></div>
-          <select class="text_pole im_scroll_behavior">
-            <option value="drag">Drag / free position</option>
-            <option value="swipe">Swipe / one beat per scroll</option>
-          </select>
-
-          <div style="margin-top:10px"><label>Scroll Feel</label></div>
-          <select class="text_pole im_scroll_feel">
-            <option value="natural">Natural Scroll</option>
-            <option value="glide">Glide Scroll</option>
-          </select>
-
-          <div style="margin-top:10px"><label>Scroll Weight</label></div>
-          <select class="text_pole im_weight">
-            <option value="heavy">Heavy</option>
-            <option value="silk">Silk</option>
-            <option value="fast">Fast</option>
-          </select>
-
-          <div style="margin-top:10px"><label>Threshold</label></div>
-          <input type="range" class="im_threshold" min="0.25" max="0.75" step="0.01" />
-          <small>How far you must scroll toward the next beat before it centers.</small>
-
-          <div style="margin-top:10px"><label>Drag / wheel sensitivity: <span class="im_drag_sensitivity_value">1.00</span>x</label></div>
-          <input type="range" class="im_drag_sensitivity" min="0.65" max="1.25" step="0.01" />
-          <small>Default 1.00x is the current feel. Lower is slightly slower, but the range is capped so dragging never becomes unusably slow.</small>
-
-          <h4 style="margin-top:12px">Auto-scroll</h4>
-          <label class="checkbox_label"><input type="checkbox" class="im_auto_scroll" /> Enable auto-scroll on open</label>
-          <div style="margin-top:6px"><label>Speed: <span class="im_auto_scroll_speed_value">0.18</span></label></div>
-          <input type="range" class="im_auto_scroll_speed" min="0" max="1" step="0.01" />
-          <small>In immersive mode, tap the “auto” button to toggle, or press &amp; drag it left/right to set speed.</small>
-        </div>
-      </div>
-
-      <!-- ============ BEHAVIOR ============ -->
-      <div class="inline-drawer" style="margin-top:10px">
-        <div class="inline-drawer-toggle inline-drawer-header"><b>Behavior &amp; Exit</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
-        <div class="inline-drawer-content">
-          <div style="margin-top:6px; display:flex; flex-direction:column; gap:8px">
-            <label class="checkbox_label"><input type="checkbox" class="im_auto_open" /> Auto-open for new assistant messages</label>
-            <label class="checkbox_label"><input type="checkbox" class="im_stream_capture" /> Capture streaming assistant responses</label>
-            <label class="checkbox_label"><input type="checkbox" class="im_fade_on_end" /> Fade back to chat when the last beat finishes</label>
-            <label class="checkbox_label"><input type="checkbox" class="im_exit_at_end" /> Exit when pushing past the end</label>
-            <label class="checkbox_label"><input type="checkbox" class="im_exit_at_start" /> Exit when pushing before the start</label>
-            <label class="checkbox_label"><input type="checkbox" class="im_hide_st_chrome" /> Hide top bar and chat bar while immersive is open</label>
-            <label class="checkbox_label"><input type="checkbox" class="im_mobile_swipe" /> Mobile left/right swipe navigation</label>
-            <label class="checkbox_label"><input type="checkbox" class="im_show_button" /> Show immersive button on messages</label>
-            <label class="checkbox_label"><input type="checkbox" class="im_show_send_button" /> Show immersive button beside Send</label>
+          <div class="im-grid">
+            <label class="im-field"><span>Scroll feel</span>
+              <select class="text_pole im_scroll_feel">
+                <option value="glide">Glide</option>
+                <option value="natural">Natural</option>
+              </select>
+            </label>
+            <label class="im-field"><span>Scroll weight</span>
+              <select class="text_pole im_weight">
+                <option value="heavy">Heavy</option>
+                <option value="silk">Silk</option>
+                <option value="fast">Fast</option>
+              </select>
+            </label>
           </div>
+
+          <label class="im-field"><span>Drag / wheel sensitivity: <b class="im_drag_sensitivity_value">1.00</b>x</span>
+            <input type="range" class="im_drag_sensitivity" min="0.65" max="1.25" step="0.01" />
+          </label>
+          <small>Dragging is always free, whatever the wheel setting.</small>
+
+          <label class="checkbox_label"><input type="checkbox" class="im_edge_bounce" /> Edge bounce at the first and last line</label>
+
+          <h4 class="im-subhead">Auto-scroll</h4>
+          <label class="checkbox_label"><input type="checkbox" class="im_auto_scroll" /> Start auto-scroll when the reader opens</label>
+          <label class="im-field"><span>Speed: <b class="im_auto_scroll_speed_value">0.18</b></span>
+            <input type="range" class="im_auto_scroll_speed" min="0" max="1" step="0.01" />
+          </label>
+          <label class="checkbox_label"><input type="checkbox" class="im_fade_on_end" /> Fade back to chat when auto-scroll finishes</label>
+          <small>In the reader, tap “auto” to start or stop. Press and drag it left or right to set speed.</small>
         </div>
       </div>
 
-      <!-- ============ MOBILE / PERFORMANCE ============ -->
-      <div class="inline-drawer" style="margin-top:10px">
-        <div class="inline-drawer-toggle inline-drawer-header"><b>Mobile / Performance</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
+      <!-- ============ OPENING & CLOSING ============ -->
+      <div class="inline-drawer im-section">
+        <div class="inline-drawer-toggle inline-drawer-header"><b>Opening &amp; Closing</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
         <div class="inline-drawer-content">
-          <div style="margin-top:6px"><label>Mobile Performance Mode</label></div>
-          <select class="text_pole im_mobile_performance">
-            <option value="auto">Auto (detect mobile/tablet)</option>
-            <option value="on">Always on</option>
-            <option value="off">Always off</option>
-          </select>
-          <small>Drops glow/blur/3D effects for smoother scrolling. Auto detects touch phones &amp; tablets (short side ≤ 1024px) and ignores portrait desktop monitors.</small>
-          <div style="margin-top:8px; opacity:.7" class="im_perf_status">Currently: —</div>
+          <label class="checkbox_label"><input type="checkbox" class="im_auto_open" /> Open automatically for new replies</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_stream_capture" /> Follow replies while they stream</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_exit_at_end" /> Close when pushing past the last line</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_exit_at_start" /> Close when pushing before the first line</label>
+          <small>Reaching the first or last line bounces. The next push past it closes.</small>
+          <label class="checkbox_label"><input type="checkbox" class="im_hide_st_chrome" /> Hide SillyTavern's top bar and chat bar while reading</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_mobile_swipe" /> Swipe left or right to change lines (phones)</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_show_button" /> Show the reader button on messages</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_show_send_button" /> Show the reader button beside Send</label>
+        </div>
+      </div>
+
+      <!-- ============ TEXT SPLITTING ============ -->
+      <div class="inline-drawer im-section">
+        <div class="inline-drawer-toggle inline-drawer-header"><b>Text Splitting &amp; Cards</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
+        <div class="inline-drawer-content">
+          <div class="im-grid">
+            <label class="im-field"><span>Content mode</span>
+              <select class="text_pole im_content_mode">
+                <option value="rp">RP (dialogue and actions)</option>
+                <option value="general">General (plain prose)</option>
+              </select>
+            </label>
+            <label class="im-field"><span>Split by</span>
+              <select class="text_pole im_extraction_mode">
+                <option value="sentence">Sentence</option>
+                <option value="punctuation">Punctuation</option>
+                <option value="balanced">Balanced blocks</option>
+              </select>
+            </label>
+          </div>
+
+          <h4 class="im-subhead">Cards</h4>
+          <label class="checkbox_label"><input type="checkbox" class="im_special_html" /> Show HTML and regex output as live cards</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_special_code" /> Show code blocks as code cards</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_skip_details_blocks" /> Skip &lt;details&gt; cards</label>
+
+          <h4 class="im-subhead">Cleanup</h4>
+          <label class="checkbox_label"><input type="checkbox" class="im_use_rendered_html" /> Read what the chat shows (after regex and markdown)</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_split_big_blocks" /> Split big narration blocks</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_italic_atomic" /> Give *italic actions* their own line</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_include_asterisk_separators" /> Show *** separators as dividers</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_exclude_bracket_pipes" /> Hide bracket choices like [a|b]</label>
+          <label class="checkbox_label"><input type="checkbox" class="im_prevent_code_html" /> Hide stray HTML and code (when cards are off)</label>
+        </div>
+      </div>
+
+      <!-- ============ PERFORMANCE ============ -->
+      <div class="inline-drawer im-section">
+        <div class="inline-drawer-toggle inline-drawer-header"><b>Performance</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
+        <div class="inline-drawer-content">
+          <label class="im-field"><span>Performance mode</span>
+            <select class="text_pole im_mobile_performance">
+              <option value="auto">Auto (phones and tablets)</option>
+              <option value="on">Always on</option>
+              <option value="off">Always off</option>
+            </select>
+          </label>
+          <small>Drops glow, blur, 3D tilt, and glass effects for smoother scrolling. The liquid rail and buttons switch to simple versions.</small>
+          <div class="im_perf_status im-status">Currently: —</div>
         </div>
       </div>
 
